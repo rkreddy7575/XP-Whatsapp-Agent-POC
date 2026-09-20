@@ -1,0 +1,157 @@
+{
+  "generated_at": "2026-09-19T20:48:22.963625",
+  "pricing_version": "2025",
+  "files_processed": [
+    {
+      "key": "water_bottles",
+      "category": "Water Bottles",
+      "path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Water Bottles\\WATER BOTTLES.xlsx",
+      "filename": "WATER BOTTLES.xlsx"
+    },
+    {
+      "key": "pens",
+      "category": "Writing Instruments",
+      "path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Pens\\XG - metal pen price list .xlsx",
+      "filename": "XG - metal pen price list .xlsx"
+    },
+    {
+      "key": "electronics",
+      "category": "Electronics",
+      "path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Electronics\\ELECTRONICS AUG 2025.xlsx",
+      "filename": "ELECTRONICS AUG 2025.xlsx"
+    },
+    {
+      "key": "mugs",
+      "category": "Mugs",
+      "path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Mugs\\MUGS.xlsx",
+      "filename": "MUGS.xlsx"
+    },
+    {
+      "key": "notebooks",
+      "category": "Notebooks",
+      "path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Note Books\\NOTEBOOK.xlsx",
+      "filename": "NOTEBOOK.xlsx"
+    },
+    {
+      "key": "combos",
+      "category": "Combos/Gift Sets",
+      "path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Combos\\ALL combos price list .xlsx",
+      "filename": "ALL combos price list .xlsx"
+    }
+  ],
+  "records_imported_per_category": {
+    "Water Bottles": 83,
+    "Writing Instruments": 168,
+    "Electronics": 71,
+    "Mugs": 53,
+    "Notebooks": 62,
+    "Combos/Gift Sets": 424
+  },
+  "total_records_imported": 861,
+  "records_skipped": 7,
+  "missing_prices": [
+    {
+      "sku": "XG-NB-053",
+      "category": "Notebooks",
+      "file": "NOTEBOOK.xlsx",
+      "sheet": "Sheet1",
+      "row": 45,
+      "raw_value": "None"
+    },
+    {
+      "sku": "XG-NB-065",
+      "category": "Notebooks",
+      "file": "NOTEBOOK.xlsx",
+      "sheet": "Sheet1",
+      "row": 57,
+      "raw_value": "None"
+    },
+    {
+      "sku": "XG-NB-066",
+      "category": "Notebooks",
+      "file": "NOTEBOOK.xlsx",
+      "sheet": "Sheet1",
+      "row": 58,
+      "raw_value": "None"
+    }
+  ],
+  "duplicate_skus": [
+    {
+      "sku": "XG-BT-050",
+      "normalized_sku": "XG-BT-050",
+      "category": "Water Bottles",
+      "file": "WATER BOTTLES.xlsx",
+      "sheet": "Sheet1",
+      "duplicate_row": 48,
+      "original_row": 47,
+      "price": 450.0
+    },
+    {
+      "sku": "XG-MP 12",
+      "normalized_sku": "XG-MP 12",
+      "category": "Writing Instruments",
+      "file": "XG - metal pen price list .xlsx",
+      "sheet": "Sheet1",
+      "duplicate_row": 16,
+      "original_row": 15
+    },
+    {
+      "sku": "XG-MP 12",
+      "normalized_sku": "XG-MP 12",
+      "category": "Writing Instruments",
+      "file": "XG - metal pen price list .xlsx",
+      "sheet": "Sheet1",
+      "duplicate_row": 17,
+      "original_row": 15
+    },
+    {
+      "sku": "XG-MP 12",
+      "normalized_sku": "XG-MP 12",
+      "category": "Writing Instruments",
+      "file": "XG - metal pen price list .xlsx",
+      "sheet": "Sheet1",
+      "duplicate_row": 18,
+      "original_row": 15
+    }
+  ],
+  "quantity_tiers_discovered": {
+    "Writing Instruments": [
+      "1-299",
+      "300-499",
+      "500+"
+    ],
+    "Water Bottles": [
+      "1+ (open-ended)"
+    ],
+    "Electronics": [
+      "1+ (open-ended)"
+    ],
+    "Combos/Gift Sets": [
+      "1+ (open-ended)"
+    ],
+    "Mugs": [
+      "1+ (open-ended)"
+    ],
+    "Notebooks": [
+      "1+ (open-ended)"
+    ]
+  },
+  "gst_rates": {
+    "Water Bottles": 12.0,
+    "Writing Instruments": 18.0,
+    "Electronics": 18.0,
+    "Combos/Gift Sets": 18.0,
+    "Mugs": 18.0,
+    "Notebooks": 18.0
+  },
+  "warnings": [
+    "Duplicate SKU XG-BT-050 at row 48 in WATER BOTTLES.xlsx (first seen row 47). Skipping row 48.",
+    "Duplicate pen SKU XG-MP 12 at row 16 in XG - metal pen price list .xlsx (first seen row 15). Skipping variant row 16.",
+    "Duplicate pen SKU XG-MP 12 at row 17 in XG - metal pen price list .xlsx (first seen row 15). Skipping variant row 17.",
+    "Duplicate pen SKU XG-MP 12 at row 18 in XG - metal pen price list .xlsx (first seen row 15). Skipping variant row 18.",
+    "Missing price for notebook SKU XG-NB-053 at row 45 in NOTEBOOK.xlsx. Omitted from pricing master without guessing.",
+    "Missing price for notebook SKU XG-NB-065 at row 57 in NOTEBOOK.xlsx. Omitted from pricing master without guessing.",
+    "Missing price for notebook SKU XG-NB-066 at row 58 in NOTEBOOK.xlsx. Omitted from pricing master without guessing."
+  ],
+  "errors": []
+}

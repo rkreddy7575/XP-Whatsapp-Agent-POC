@@ -1,0 +1,1683 @@
+{
+  "audit_title": "Mudhra Branding Solutions - Corporate Mudhra Pricing Source Audit",
+  "audit_date": "2026-09-19",
+  "directory_audited": "D:\\Mudra Branding Solutions\\Corporate Mudhra",
+  "total_files_in_directory": 37,
+  "candidate_pricing_files_count": 6,
+  "candidate_pricing_files": [
+    {
+      "filename": "ALL combos price list .xlsx",
+      "full_path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Combos\\ALL combos price list .xlsx",
+      "file_type": "Microsoft Excel Worksheet (.xlsx)",
+      "file_size_bytes": 43594,
+      "created_timestamp": "2025-12-05 12:00:27",
+      "modified_timestamp": "2025-11-21 19:17:42",
+      "category": "Combos & Gift Sets",
+      "sheet_names": [
+        "ALL COMBOS",
+        "2 IN 1",
+        "3 IN 1",
+        "4 IN 1",
+        "5 IN 1 ",
+        "6 IN 1",
+        "7 IN 1"
+      ],
+      "gst_information": {
+        "gst_rate": "18%",
+        "gst_treatment": "EXCLUSIVE",
+        "explicit_in_sheet": false
+      },
+      "quantity_tiers_present": false,
+      "quantity_tiers_detail": null,
+      "sheets": {
+        "ALL COMBOS": {
+          "row_count": 175,
+          "column_count": 46,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE",
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE",
+              "SL. NO.",
+              "PRODUCT CODE",
+              "GIFT SET"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 1,
+              "values": [
+                "ALL COMBOS",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                null,
+                " 3 IN 1  GIFT SET (1 TO 7)",
+                null,
+                null,
+                null,
+                null,
+                " 6 IN 1  GIFT SET (29 TO 35)",
+                null,
+                null,
+                null,
+                null,
+                " 2 IN 1  GIFT SET   DAIRY / PEN (245 TO 253)",
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE",
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE",
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "GIFT SET"
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                null,
+                "1",
+                "XG - GS - 001",
+                "3-IN-1 GIFT SET",
+                "445",
+                null,
+                "29",
+                "XG - GS - 029",
+                "6-IN-1 GIFT SET",
+                "675",
+                null,
+                "45",
+                "XG-GS-245",
+                "2-IN-1 GIFT SET"
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                null,
+                "2",
+                "XG - GS - 002",
+                "3-IN-1 GIFT SET",
+                "665",
+                null,
+                "29A",
+                "XG - GS - 029A",
+                "6-IN-1 GIFT SET",
+                "660",
+                null,
+                "46",
+                "XG-GS-246",
+                "2-IN-1 GIFT SET"
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                null,
+                "2A",
+                "XG - GS - 002A",
+                "3-IN-1 GIFT SET",
+                "460",
+                null,
+                "29B",
+                "XG - GS - 029B",
+                "6-IN-1 GIFT SET",
+                "850",
+                null,
+                "47",
+                "XG-GS-247",
+                "2-IN-1 GIFT SET"
+              ]
+            }
+          ]
+        },
+        "2 IN 1": {
+          "row_count": 62,
+          "column_count": 23,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "S.NO ",
+              "PRODUCT CODE",
+              "GIFT SET",
+              "PRICE",
+              "S.NO",
+              "PRODUCT CODE",
+              "GIFT SET",
+              "PRICE",
+              "SL. NO.",
+              "PRODUCT CODE",
+              "GIFT SET"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 1,
+              "values": [
+                "2 IN 1 GIFT SET",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                null,
+                " 2 IN 1  GIFT SET (DAIRY / PEN)",
+                null,
+                null,
+                null,
+                null,
+                "2 IN 1 (PEN /CARD HOLDER) (392 TO 402)",
+                null,
+                null,
+                null,
+                null,
+                " 2 IN 1  GIFT SET  (MUG/BOTTLE)",
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                null,
+                "S.NO ",
+                "PRODUCT CODE",
+                "GIFT SET",
+                "PRICE",
+                null,
+                "S.NO",
+                "PRODUCT CODE",
+                "GIFT SET",
+                "PRICE",
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "GIFT SET"
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                null,
+                "1",
+                "XG-GS-267",
+                "GIFT SET",
+                "255",
+                null,
+                "1",
+                "XG-GS-392",
+                "GIFT SET",
+                "145",
+                null,
+                "1",
+                "XG-GS-245",
+                "2-IN-1 GIFT SET"
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                null,
+                "2",
+                "XG-GS-268",
+                "GIFT SET",
+                "210",
+                null,
+                "2",
+                "XG-GS-393",
+                "GIFT SET",
+                "115",
+                null,
+                "2",
+                "XG-GS-246",
+                "2-IN-1 GIFT SET"
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                null,
+                "3",
+                "XG-GS-269",
+                "GIFT SET",
+                "270",
+                null,
+                "3",
+                "XG-GS-394",
+                "GIFT SET",
+                "155",
+                null,
+                "3",
+                "XG-GS-247",
+                "2-IN-1 GIFT SET"
+              ]
+            }
+          ]
+        },
+        "3 IN 1": {
+          "row_count": 135,
+          "column_count": 23,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "GIFT SET",
+              "PRICE",
+              "S.NO ",
+              "PRODUCT CODE",
+              "3 IN 1 GIFT SET ",
+              "PRICE",
+              "S.NO ",
+              "PRODUCT CODE",
+              "3IN1 GIFT SET "
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 1,
+              "values": [
+                "3 IN 1 GIFT SET",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                null,
+                " 3 IN 1  GIFT SET (DAIRY/PEN/BOTTLE) (1 TO 7)",
+                null,
+                null,
+                null,
+                null,
+                "3 IN 1 GIFT SET (DAIRY / PEN / KEYCHAIN)",
+                null,
+                null,
+                null,
+                null,
+                "3 IN 1 GIFT SET (DAIRY / PEN / ELECTRONICS)",
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "GIFT SET",
+                "PRICE",
+                null,
+                "S.NO ",
+                "PRODUCT CODE",
+                "3 IN 1 GIFT SET ",
+                "PRICE",
+                null,
+                "S.NO ",
+                "PRODUCT CODE",
+                "3IN1 GIFT SET "
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                null,
+                "1",
+                "XG - GS - 001",
+                "3-IN-1 GIFT SET",
+                "445",
+                null,
+                "1",
+                "XG-GS-456",
+                "GIFT SET",
+                "295",
+                null,
+                "1",
+                "XG-GS-575",
+                "3 IN 1 GIFT SET"
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                null,
+                "2",
+                "XG - GS - 002",
+                "3-IN-1 GIFT SET",
+                "665",
+                null,
+                "2",
+                "XG-GS-457",
+                "GIFT SET",
+                "325",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                null,
+                "2A",
+                "XG - GS - 002A",
+                "3-IN-1 GIFT SET",
+                "460",
+                null,
+                "3",
+                "XG-GS-458",
+                "GIFT SET",
+                "295",
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ]
+        },
+        "4 IN 1": {
+          "row_count": 105,
+          "column_count": 23,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE",
+              "S.NO ",
+              "PRODUCT CODE",
+              "4 IN 1 GIFT SET",
+              "PRICE",
+              "S.NO ",
+              "PRODUCT CODE",
+              "4 IN1 GIFT SET "
+            ],
+            [
+              "11",
+              "XG - GS - 011",
+              "4-IN-1 GIFT SET",
+              "695",
+              "5",
+              "XG-GS-311",
+              "GIFT SET",
+              "335",
+              "S.NO ",
+              "PRODUCT CODE",
+              "4 IN1 GIFT SET "
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 1,
+              "values": [
+                "4 IN 1 GIFT SET",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                null,
+                " 4 IN 1  GIFT SET (8 TO 14)",
+                null,
+                null,
+                null,
+                null,
+                "4 IN 1 GIFT SET (DAIRY /PEN/ KEYCHAIN/ CARD HOLDER)",
+                null,
+                null,
+                null,
+                null,
+                "4 IN 1 GIFT SET (BOTTLE / MUG / KEYCHAIN/PEN)",
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE",
+                null,
+                "S.NO ",
+                "PRODUCT CODE",
+                "4 IN 1 GIFT SET",
+                "PRICE",
+                null,
+                "S.NO ",
+                "PRODUCT CODE",
+                "4 IN1 GIFT SET "
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                null,
+                "8",
+                "XG - GS - 008",
+                "4-IN-1 GIFT SET",
+                "765",
+                null,
+                "1",
+                "XG-GS-307",
+                "GIFT SET",
+                "400",
+                null,
+                "5",
+                "XG-GS-579",
+                "4 IN 1 GIFT SET"
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                null,
+                "9",
+                "XG - GS - 009",
+                "4-IN-1 GIFT SET",
+                "535",
+                null,
+                "2",
+                "XG-GS-308",
+                "GIFT SET",
+                "415",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                null,
+                "10",
+                "XG - GS - 010",
+                "4-IN-1 GIFT SET",
+                "665",
+                null,
+                "3",
+                "XG-GS-309",
+                "GIFT SET",
+                "350",
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ]
+        },
+        "5 IN 1 ": {
+          "row_count": 25,
+          "column_count": 23,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE",
+              "S.NO ",
+              "PRODUCT CODE",
+              "5 IN1 GIFT SET ",
+              "PRICE"
+            ],
+            [
+              "18",
+              "XG - GS - 018",
+              "5-IN-1 GIFT SET",
+              "965",
+              "S.NO ",
+              "PRODUCT CODE",
+              "5 IN1 GIFT SET ",
+              "PRICE"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 1,
+              "values": [
+                "5 IN 1 GIFT SET",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                null,
+                " 5 IN 1  GIFT SET (15 TO 28)",
+                null,
+                null,
+                null,
+                null,
+                "5 IN 1 GIFT SET (CARD HOLDER / MOUSE / KEYCHAIN /PEN /CABLE)",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE",
+                null,
+                "S.NO ",
+                "PRODUCT CODE",
+                "5 IN1 GIFT SET ",
+                "PRICE",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                null,
+                "15",
+                "XG - GS - 015",
+                "5-IN-1 GIFT SET",
+                "525",
+                null,
+                "2",
+                "XG-GS-576",
+                "5 IN 1 GIFT SET",
+                "590",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                null,
+                "16",
+                "XG - GS - 016",
+                "5-IN-1 GIFT SET",
+                "980",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                null,
+                "17",
+                "XG - GS - 017",
+                "5-IN-1 GIFT SET",
+                "980",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ]
+        },
+        "6 IN 1": {
+          "row_count": 13,
+          "column_count": 23,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 1,
+              "values": [
+                "6 IN 1 GIFT SET",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                null,
+                " 6 IN 1  GIFT SET (29 TO 35)",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                null,
+                "29",
+                "XG - GS - 029",
+                "6-IN-1 GIFT SET",
+                "675",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                null,
+                "29A",
+                "XG - GS - 029A",
+                "6-IN-1 GIFT SET",
+                "660",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                null,
+                "29B",
+                "XG - GS - 029B",
+                "6-IN-1 GIFT SET",
+                "850",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ]
+        },
+        "7 IN 1": {
+          "row_count": 12,
+          "column_count": 23,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "GIFT SET",
+              "PRICE",
+              "SL. NO.",
+              "PRODUCT CODE",
+              "GIFT SET",
+              "PRICE"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 1,
+              "values": [
+                "7 IN 1 GIFT SET",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                null,
+                " 7 IN 1  GIFT SET (36 TO 43)",
+                null,
+                null,
+                null,
+                null,
+                " 7 IN 1  GIFT SET",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "GIFT SET",
+                "PRICE",
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "GIFT SET",
+                "PRICE",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                null,
+                "34",
+                "XG - GS - 036",
+                "7-IN-1 GIFT SET",
+                "1300",
+                null,
+                "10",
+                "XG-GS-584",
+                "7 IN 1 GIFT SET",
+                "990",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                null,
+                "36",
+                "XG - GS - 037",
+                "7-IN-1 GIFT SET",
+                "1750",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                null,
+                "38",
+                "XG - GS - 038",
+                "7-IN-1 GIFT SET",
+                "1160",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "filename": "ELECTRONICS AUG 2025.xlsx",
+      "full_path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Electronics\\ELECTRONICS AUG 2025.xlsx",
+      "file_type": "Microsoft Excel Worksheet (.xlsx)",
+      "file_size_bytes": 13200,
+      "created_timestamp": "2025-12-05 11:59:55",
+      "modified_timestamp": "2025-11-21 19:17:41",
+      "category": "Electronics",
+      "sheet_names": [
+        "ELECTRONICS"
+      ],
+      "gst_information": {
+        "gst_rate": "18% (standard electronic gifts)",
+        "gst_treatment": "EXCLUSIVE",
+        "explicit_in_sheet": false
+      },
+      "quantity_tiers_present": false,
+      "quantity_tiers_detail": null,
+      "sheets": {
+        "ELECTRONICS": {
+          "row_count": 79,
+          "column_count": 14,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE ( INR )"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 3,
+              "values": [
+                "ELECTRONICS",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE ( INR )",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                "1",
+                "XG-T-001",
+                "B/W",
+                "160",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                "2",
+                "XG-T-002",
+                "B/R/BL",
+                "125",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                "3",
+                "XG-T-003",
+                "B/W/BR/GREY",
+                "460",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 8,
+              "values": [
+                "4",
+                "XG-T-004",
+                "B/W",
+                "185",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "filename": "MUGS.xlsx",
+      "full_path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Mugs\\MUGS.xlsx",
+      "file_type": "Microsoft Excel Worksheet (.xlsx)",
+      "file_size_bytes": 13241,
+      "created_timestamp": "2025-11-19 18:30:55",
+      "modified_timestamp": "2025-12-11 15:24:10",
+      "category": "Mugs & Drinkware",
+      "sheet_names": [
+        "Sheet1"
+      ],
+      "gst_information": {
+        "gst_rate": "18%",
+        "gst_treatment": "EXCLUSIVE",
+        "explicit_in_sheet": true
+      },
+      "quantity_tiers_present": false,
+      "quantity_tiers_detail": null,
+      "sheets": {
+        "Sheet1": {
+          "row_count": 61,
+          "column_count": 6,
+          "formulas_present": true,
+          "formula_count": 53,
+          "sample_formulas": [
+            {
+              "cell": "R4C6",
+              "formula": "=E4*18/100"
+            },
+            {
+              "cell": "R5C6",
+              "formula": "=E5*18/100"
+            },
+            {
+              "cell": "R6C6",
+              "formula": "=E6*18/100"
+            },
+            {
+              "cell": "R7C6",
+              "formula": "=E7*18/100"
+            },
+            {
+              "cell": "R8C6",
+              "formula": "=E8*18/100"
+            }
+          ],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE ( INR )",
+              "TAX(18%)"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 2,
+              "values": [
+                null,
+                "MUGS",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                null,
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE ( INR )",
+                "TAX(18%)"
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                null,
+                "1",
+                "XG-MG-001",
+                "R/W/BL",
+                "95",
+                "17.1"
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                null,
+                "2",
+                "XG-MG-002",
+                "B/R/BL",
+                "95",
+                "17.1"
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                null,
+                "3",
+                "XG-MG-003",
+                "B/BL/W",
+                "250",
+                "45"
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                null,
+                "4",
+                "XG-MG-004",
+                "BAMBOO",
+                "260",
+                "46.8"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "filename": "NOTEBOOK.xlsx",
+      "full_path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Note Books\\NOTEBOOK.xlsx",
+      "file_type": "Microsoft Excel Worksheet (.xlsx)",
+      "file_size_bytes": 13491,
+      "created_timestamp": "2025-12-05 11:59:28",
+      "modified_timestamp": "2025-12-19 16:35:15",
+      "category": "Notebooks",
+      "sheet_names": [
+        "Sheet1",
+        "Sheet2"
+      ],
+      "gst_information": {
+        "gst_rate": "18% (stationery default)",
+        "gst_treatment": "EXCLUSIVE",
+        "explicit_in_sheet": false
+      },
+      "quantity_tiers_present": false,
+      "quantity_tiers_detail": null,
+      "sheets": {
+        "Sheet1": {
+          "row_count": 77,
+          "column_count": 5,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE ( INR )"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 1,
+              "values": [
+                ".",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 2,
+              "values": [
+                "NOTE BOOK",
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE ( INR )",
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                "1",
+                "XG-NB-001",
+                "B/W/BL/R/GREY",
+                "165",
+                null
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                "2",
+                "XG-NB-002",
+                "B/W/BL/R/GREY",
+                "145",
+                null
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                "3",
+                "XG-NB-003",
+                "B/W/BL/R/GREY",
+                "120",
+                null
+              ]
+            }
+          ]
+        },
+        "Sheet2": {
+          "row_count": 1,
+          "column_count": 1,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [],
+          "sample_rows": []
+        }
+      }
+    },
+    {
+      "filename": "XG - metal pen price list .xlsx",
+      "full_path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Pens\\XG - metal pen price list .xlsx",
+      "file_type": "Microsoft Excel Worksheet (.xlsx)",
+      "file_size_bytes": 13839,
+      "created_timestamp": "2025-11-19 18:29:44",
+      "modified_timestamp": "2025-09-08 16:11:21",
+      "category": "Writing Instruments",
+      "sheet_names": [
+        "Sheet1"
+      ],
+      "gst_information": {
+        "gst_rate": "18%",
+        "gst_treatment": "EXCLUSIVE",
+        "explicit_in_sheet": false
+      },
+      "quantity_tiers_present": true,
+      "quantity_tiers_detail": "MOQ 1-299, MOQ 300, MOQ 500",
+      "sheets": {
+        "Sheet1": {
+          "row_count": 63,
+          "column_count": 7,
+          "formulas_present": false,
+          "formula_count": 0,
+          "sample_formulas": [],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "PRODUCT NAME",
+              "COLOR",
+              "MOQ 500",
+              "MOQ 300",
+              "MOQ 1-299"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 3,
+              "values": [
+                "SL. NO.",
+                "PRODUCT CODE",
+                "PRODUCT NAME",
+                "COLOR",
+                "MOQ 500",
+                "MOQ 300",
+                "MOQ 1-299"
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                "1",
+                "XG-MP 01",
+                "ALUMINIUM METAL ",
+                "BK/BL/R/G/MG/WH",
+                "12.5",
+                "13.5",
+                "15"
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                "2",
+                "XG-MP 02",
+                "BAMBOO GRIP  (P 52 )",
+                "BK/R/ BL",
+                "19",
+                "20",
+                "23"
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                "3",
+                "XG-MP 03",
+                "RUBBER COATED (P 2)",
+                "BK/R/ BL",
+                "18",
+                "20",
+                "23"
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                "4",
+                "XG-MP 04",
+                "CAPTAIN",
+                "BK/R/ BL",
+                "35",
+                "38",
+                "40"
+              ]
+            },
+            {
+              "row_number": 8,
+              "values": [
+                "5",
+                "XG-MP 05",
+                "MULTI FUNCTIONAL (MOB HOL )",
+                "BK/R/ BL",
+                "20",
+                "22",
+                "24"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "filename": "WATER BOTTLES.xlsx",
+      "full_path": "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Water Bottles\\WATER BOTTLES.xlsx",
+      "file_type": "Microsoft Excel Worksheet (.xlsx)",
+      "file_size_bytes": 13434,
+      "created_timestamp": "2025-11-19 18:30:37",
+      "modified_timestamp": "2025-08-23 13:37:11",
+      "category": "Water Bottles",
+      "sheet_names": [
+        "Sheet1"
+      ],
+      "gst_information": {
+        "gst_rate": "12%",
+        "gst_treatment": "EXCLUSIVE",
+        "explicit_in_sheet": true
+      },
+      "quantity_tiers_present": false,
+      "quantity_tiers_detail": null,
+      "sheets": {
+        "Sheet1": {
+          "row_count": 87,
+          "column_count": 6,
+          "formulas_present": true,
+          "formula_count": 84,
+          "sample_formulas": [
+            {
+              "cell": "R4C5",
+              "formula": "=D4*12/100&\" (12%)\""
+            },
+            {
+              "cell": "R5C5",
+              "formula": "=D5*12/100&\" (12%)\""
+            },
+            {
+              "cell": "R6C5",
+              "formula": "=D6*12/100&\" (12%)\""
+            },
+            {
+              "cell": "R7C5",
+              "formula": "=D7*12/100&\" (12%)\""
+            },
+            {
+              "cell": "R8C5",
+              "formula": "=D8*12/100&\" (12%)\""
+            }
+          ],
+          "detected_headers": [
+            [
+              "SL. NO.",
+              "PRODUCT CODE",
+              "COLOR",
+              "PRICE ( INR )",
+              "TAX"
+            ]
+          ],
+          "sample_rows": [
+            {
+              "row_number": 2,
+              "values": [
+                "WATER BOTTLES",
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "row_number": 3,
+              "values": [
+                "SL. NO.",
+                "PRODUCT CODE",
+                "COLOR",
+                "PRICE ( INR )",
+                "TAX",
+                null
+              ]
+            },
+            {
+              "row_number": 4,
+              "values": [
+                "1",
+                "XG-BT-001",
+                "B/G/R/BL",
+                "130",
+                "15.6 (12%)",
+                null
+              ]
+            },
+            {
+              "row_number": 5,
+              "values": [
+                "2",
+                "XG-BT-002",
+                "B/W/G/R/BL",
+                "145",
+                "17.4 (12%)",
+                null
+              ]
+            },
+            {
+              "row_number": 6,
+              "values": [
+                "3",
+                "XG-BT-003",
+                "B/W/G/R",
+                "150",
+                "18 (12%)",
+                null
+              ]
+            },
+            {
+              "row_number": 7,
+              "values": [
+                "4",
+                "XG-BT-004",
+                "BL/R/B",
+                "120",
+                "14.4 (12%)",
+                null
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "recommended_source_candidate": {
+    "architecture_pattern": "Decentralized Category-Wise Master Workbooks (August–December 2025)",
+    "summary": "The directory 'Corporate Mudhra' does not contain a single monolithic master workbook like the 2024 archive. Instead, Mudhra operates a modern category-wise pricing architecture where each category is maintained in its respective folder with updated 2025 pricing.",
+    "primary_files": [
+      "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Combos\\ALL combos price list .xlsx",
+      "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Electronics\\ELECTRONICS AUG 2025.xlsx",
+      "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Mugs\\MUGS.xlsx",
+      "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Note Books\\NOTEBOOK.xlsx",
+      "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Pens\\XG - metal pen price list .xlsx",
+      "D:\\Mudra Branding Solutions\\Corporate Mudhra\\Water Bottles\\WATER BOTTLES.xlsx"
+    ],
+    "evidence": [
+      "Modification timestamps are from August–December 2025 (12-16 months newer than the September 2024 catalogue archive).",
+      "MUGS.xlsx contains updated prices (e.g. XG-MG-003 was ₹230 in 2024, revised to ₹250 in late 2025; XG-MG-008 was ₹150, revised to ₹90).",
+      "WATER BOTTLES.xlsx contains updated prices and explicit 12% GST tax formula (=D4*12/100&\" (12%)\").",
+      "MUGS.xlsx contains explicit 18% GST tax formula (=E4*18/100).",
+      "NOTEBOOK.xlsx populates 26 notebooks that were completely unpriced (None) in the 2024 master list, and extends the catalog to XG-NB-072.",
+      "XG - metal pen price list .xlsx introduces volume pricing tiers (MOQ 1-299, MOQ 300, MOQ 500) and full product titles.",
+      "ELECTRONICS AUG 2025.xlsx is explicitly labeled August 2025 and updates all 44 electronics products with revised 2025 rates."
+    ]
+  },
+  "key_findings": {
+    "pricing_model": "Volume tiered where explicitly defined (Pens), single base price per unit for other categories.",
+    "gst_handling": {
+      "treatment": "All prices are GST-exclusive.",
+      "rates": {
+        "Water Bottles": "12% GST",
+        "Mugs": "18% GST",
+        "Pens": "18% GST",
+        "Electronics": "18% GST",
+        "Notebooks": "18% GST",
+        "Combos & Gift Sets": "18% GST"
+      }
+    },
+    "sku_mapping_notes": {
+      "Electronics": "Uses 'XG-T-001' which maps 1-to-1 with 'XG-EL-001'.",
+      "Combos & Gift Sets": "Uses 'XG-GS-xxx' format alongside standard codes.",
+      "Metal Pens": "Uses 'XG-MP 01' with space which normalizes to 'XG-MP-01'."
+    }
+  },
+  "unresolved_questions_for_user": [
+    "Is there a live Google Sheet that synchronizes with these 2025 category workbooks, or do these workbooks represent the offline source of truth?",
+    "For categories other than Pens (e.g. Mugs, Bottles, Notebooks), are quantity tiers standard across the business (e.g. standard 100-249, 250-499, 500+ discount percentages), or is discounting customized per deal?",
+    "Should Electronics SKUs be normalized from 'XG-T-xxx' to 'XG-EL-xxx' during pricing lookup?",
+    "What is the exact Google Sheet URL or ID if live Google Sheets synchronization is required?"
+  ]
+}

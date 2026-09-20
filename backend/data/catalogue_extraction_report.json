@@ -1,0 +1,28 @@
+{
+  "total_records_extracted": 768,
+  "unique_sku_count": 768,
+  "duplicate_sku_count": 0,
+  "records_missing_names": 768,
+  "records_missing_prices": 204,
+  "records_missing_category": 0,
+  "records_missing_moq": 768,
+  "records_missing_sku": 0,
+  "counts_by_category": {
+    "Gift Sets": 244,
+    "Keychains": 55,
+    "Notebooks": 60,
+    "Combos": 93,
+    "Writing Instruments": 83,
+    "Now Go": 12,
+    "Electronics": 44,
+    "Mugs & Drinkware": 46,
+    "ID Cards & Accessories": 48,
+    "Water Bottles": 83
+  },
+  "counts_by_source_sheet": {
+    "G.S.": 272,
+    "COMBO": 127,
+    "Sheet2": 101,
+    "Sheet1": 268
+  }
+}

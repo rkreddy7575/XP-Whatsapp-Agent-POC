@@ -1,0 +1,45 @@
+{
+  "_comment": "DEVELOPMENT ONLY — NOT REAL INVENTORY. Used exclusively for automated unit testing and local simulation. Production inventory will be connected to Google Sheets.",
+  "items": [
+    {
+      "sku": "XG-GS-501",
+      "physical_stock": 1000,
+      "reserved_stock": 100,
+      "reorder_level": 200,
+      "status": "IN_STOCK",
+      "supplier_id": "SUP-MUDHRA-01",
+      "source": "DEVELOPMENT_MOCK",
+      "last_updated": "2026-09-19T21:00:00Z"
+    },
+    {
+      "sku": "XG-BT-001",
+      "physical_stock": 500,
+      "reserved_stock": 50,
+      "reorder_level": 100,
+      "status": "IN_STOCK",
+      "supplier_id": "SUP-MUDHRA-02",
+      "source": "DEVELOPMENT_MOCK",
+      "last_updated": "2026-09-19T21:00:00Z"
+    },
+    {
+      "sku": "XG-MG-001",
+      "physical_stock": 200,
+      "reserved_stock": 25,
+      "reorder_level": 50,
+      "status": "IN_STOCK",
+      "supplier_id": "SUP-MUDHRA-03",
+      "source": "DEVELOPMENT_MOCK",
+      "last_updated": "2026-09-19T21:00:00Z"
+    },
+    {
+      "sku": "XG-MP 01",
+      "physical_stock": 5000,
+      "reserved_stock": 500,
+      "reorder_level": 1000,
+      "status": "IN_STOCK",
+      "supplier_id": "SUP-MUDHRA-04",
+      "source": "DEVELOPMENT_MOCK",
+      "last_updated": "2026-09-19T21:00:00Z"
+    }
+  ]
+}

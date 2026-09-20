@@ -1,0 +1,28 @@
+# Backend Docker Ignore
+# Exclude local virtual environments, test databases, caches, and secrets
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+.env.local
+.env.production
+!.env.example
+
+# Exclude test database and temporary archives
+data/test_app.db
+data/backups/
+data/*archive*.db
+data/*.db-wal
+data/*.db-shm
+
+# Exclude editor and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,20 @@
+# Root Docker Ignore
+.git/
+.venv/
+venv/
+**/__pycache__/
+**/*.pyc
+**/.env
+**/.env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.example
+
+**/test_app.db
+**/backups/
+**/data/*archive*.db
+
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/

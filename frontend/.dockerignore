@@ -1,0 +1,16 @@
+# Frontend Docker Ignore
+node_modules/
+dist/
+dist-ssr/
+logs/
+*.log
+.env
+.env.*
+.env.local
+.env.production
+!.env.example
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

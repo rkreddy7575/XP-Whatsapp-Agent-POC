@@ -1,0 +1,55 @@
+# Environment variables
+.env
+*.env
+.env.*
+.env.local
+.env.production
+!.env.example
+!backend/.env.example
+!frontend/.env.example
+backend/.env
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+
+# Frontend build and dependencies
+frontend/dist/
+frontend/node_modules/
+
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+backend/.venv/
+backend/venv/
+
+# IDE files and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Database backups, production database, and test databases
+backend/data/app.db
+backend/data/*.db
+backend/data/backups/
+backend/data/test_app.db
+backend/data/*archive*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+
+# Logs and transcripts
+*.log
+logs/
+backend/logs/
+CHAT_TRANSCRIPT.jsonl
+FULL_CHAT_HISTORY.md
+
+
+
