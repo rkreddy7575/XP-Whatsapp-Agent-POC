@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import uuid
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 
@@ -12,8 +13,9 @@ if backend_dir not in sys.path:
 from main import app
 from services.catalogue_service import catalogue_service
 
-def make_webhook_payload(body_text: str, sender: str = "919876543210"):
+def make_webhook_payload(body_text: str, sender: str = "919876543210", message_id: str = None):
     """Helper to generate a Meta Cloud API incoming message webhook payload."""
+    msg_id = message_id or f"wamid.test_{uuid.uuid4().hex[:12]}"
     return {
         "object": "whatsapp_business_account",
         "entry": [
@@ -36,7 +38,7 @@ def make_webhook_payload(body_text: str, sender: str = "919876543210"):
                             "messages": [
                                 {
                                     "from": sender,
-                                    "id": "wamid.HBgMOTE5ODc2NTQzMjEwFQIAEhgUM0EBQ0RF",
+                                    "id": msg_id,
                                     "timestamp": "1726750000",
                                     "text": {"body": body_text},
                                     "type": "text"
@@ -216,46 +218,37 @@ class TestWebhookCatalogueIntegration(unittest.TestCase):
 
     @patch("main.send_text_message", new_callable=AsyncMock)
     def test_11_pricing_request_unconfigured(self, mock_send):
-        # Case: 'XG-501 100'
-        payload1 = make_webhook_payload("XG-501 100")
+        # Case: 'XG-577 100' (XG-577 is an unconfigured combo SKU)
+        payload1 = make_webhook_payload("XG-577 100")
         response1 = self.client.post("/webhook", json=payload1)
         self.assertEqual(response1.status_code, 200)
         mock_send.assert_called_once()
         args, kwargs = mock_send.call_args
         msg1 = kwargs.get("message") or args[1]
-        self.assertEqual(msg1, "Pricing for XG-501 is not configured yet. Please contact sales.")
+        self.assertEqual(msg1, "Pricing for XG-577 is not configured yet. Please contact sales.")
 
-        # Case: '100 XG-501'
+        # Case: '100 XG-577'
         mock_send.reset_mock()
-        payload2 = make_webhook_payload("100 XG-501")
+        payload2 = make_webhook_payload("100 XG-577")
         response2 = self.client.post("/webhook", json=payload2)
         self.assertEqual(response2.status_code, 200)
         mock_send.assert_called_once()
         args, kwargs = mock_send.call_args
         msg2 = kwargs.get("message") or args[1]
-        self.assertEqual(msg2, "Pricing for XG-501 is not configured yet. Please contact sales.")
+        self.assertEqual(msg2, "Pricing for XG-577 is not configured yet. Please contact sales.")
 
     @patch("main.send_text_message", new_callable=AsyncMock)
     def test_12_pricing_request_configured(self, mock_send):
-        from services.pricing_service import PriceRule, pricing_service
-        try:
-            # Temporarily configure a rule for testing
-            pricing_service.add_rule(
-                PriceRule(sku="XG-501", quantity_from=50, quantity_to=150, base_price=210.0, gst_percentage=18.0, source="TEST_FIXTURE")
-            )
-            payload = make_webhook_payload("XG-501 100")
-            response = self.client.post("/webhook", json=payload)
-            self.assertEqual(response.status_code, 200)
-            mock_send.assert_called_once()
-            args, kwargs = mock_send.call_args
-            msg = kwargs.get("message") or args[1]
-            self.assertIn("Quotation for XG-501", msg)
-            self.assertIn("100 units", msg)
-            self.assertIn("₹210.00", msg)
-            self.assertIn("₹24,780.00", msg)
-        finally:
-            pricing_service.clear_rules()
-            pricing_service.load_pricing_master()
+        payload = make_webhook_payload("XG-501 100")
+        response = self.client.post("/webhook", json=payload)
+        self.assertEqual(response.status_code, 200)
+        mock_send.assert_called_once()
+        args, kwargs = mock_send.call_args
+        msg = kwargs.get("message") or args[1]
+        self.assertIn("Quotation for XG-501", msg)
+        self.assertIn("100 units", msg)
+        self.assertIn("410.00", msg)
+        self.assertIn("48,380.00", msg)
 
 if __name__ == "__main__":
     unittest.main()

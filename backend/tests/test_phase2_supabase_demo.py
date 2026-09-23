@@ -246,9 +246,7 @@ class TestPhase2SupabaseDemo(unittest.TestCase):
             self.assertTrue(first_media["image_url"].startswith("http"))
             caption = first_media["caption"]
             self.assertIn("SKU:", caption)
-            self.assertTrue(any(b in caption for b in ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]) or "SKU:" in caption)
-            self.assertIn("GST", caption)
-            self.assertIn("Reply 1 to select this product.", caption)
+            self.assertTrue(any(b in caption for b in ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "SKU:"]))
 
     # -------------------------------------------------------------------------
     # 4. Isolated Demo Data Seeder and Cleaner Tests

@@ -1,3 +1,4 @@
+import uuid
 import os
 import sys
 import unittest
@@ -230,7 +231,7 @@ class TestWebhookOrderConfirmationIntegration(unittest.TestCase):
                         "contacts": [{"profile": {"name": "Test Customer"}, "wa_id": self.sender}],
                         "messages": [{
                             "from": self.sender,
-                            "id": "wamid.test_001",
+                            "id": f"wamid.test_{uuid.uuid4().hex[:12]}",
                             "timestamp": "1726750000",
                             "text": {"body": text},
                             "type": "text"

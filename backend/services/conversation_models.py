@@ -16,6 +16,7 @@ class ConversationMessage:
     direction: MessageDirection
     message_text: str
     timestamp: str
+    channel_message_id: Optional[str] = None
 
 
 @dataclass

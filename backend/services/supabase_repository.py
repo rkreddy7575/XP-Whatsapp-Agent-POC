@@ -105,6 +105,20 @@ class SupabaseClient:
             logger.error("Supabase insert error on %s: %s", table, exc)
             return []
 
+    def delete(self, table: str, params: Dict[str, Any]) -> bool:
+        if not self.is_configured:
+            return False
+        url = f"{self.url}/rest/v1/{table}"
+        try:
+            resp = self.client.delete(url, headers=self._headers(), params=params)
+            if resp.is_success:
+                return True
+            logger.warning("Supabase delete %s failed: %d %s", table, resp.status_code, resp.text)
+            return False
+        except Exception as exc:
+            logger.error("Supabase delete error on %s: %s", table, exc)
+            return False
+
     def update(self, table: str, data: Dict[str, Any], params: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not self.is_configured:
             return [data]
@@ -392,6 +406,17 @@ class SupabaseMessageRepository:
             "limit": str(limit),
         }
         return self.client.select("messages", params)
+
+    def get_by_channel_message_id(self, channel_message_id: str):
+        if not channel_message_id:
+            return None
+        params = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "channel_message_id": f"eq.{channel_message_id}",
+            "limit": "1",
+        }
+        res = self.client.select("messages", params)
+        return res[0] if res else None
 
 
 # =============================================================================

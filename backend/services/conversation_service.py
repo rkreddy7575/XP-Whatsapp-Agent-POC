@@ -3,6 +3,9 @@ import os
 import re
 import sqlite3
 import sys
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -39,6 +42,42 @@ def get_default_db_path() -> str:
 DEFAULT_DB_PATH = DEFAULT_PROD_DB_PATH
 
 
+class MessageDedupCache:
+    """Thread-safe TTL/LRU cache for incoming WhatsApp message IDs (wamids)."""
+    def __init__(self, max_size: int = 2000, ttl_seconds: int = 900):
+        self.max_size = max_size
+        self.ttl_seconds = ttl_seconds
+        self._cache: OrderedDict[str, float] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def is_duplicate(self, message_id: Optional[str]) -> bool:
+        if not message_id:
+            return False
+        now = time.time()
+        with self._lock:
+            if message_id in self._cache:
+                timestamp = self._cache[message_id]
+                if now - timestamp < self.ttl_seconds:
+                    return True
+                else:
+                    del self._cache[message_id]
+        return False
+
+    def mark_seen(self, message_id: Optional[str]) -> None:
+        if not message_id:
+            return
+        now = time.time()
+        with self._lock:
+            self._cache[message_id] = now
+            self._cache.move_to_end(message_id)
+            if len(self._cache) > self.max_size:
+                self._cache.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
+
 class ConversationService:
     """
     SQLite-backed conversation state service for WhatsApp customer interactions.
@@ -49,6 +88,7 @@ class ConversationService:
         self._explicit_db_path = db_path
         self._mem_conn: Optional[sqlite3.Connection] = None
         self._initialized_paths: Set[str] = set()
+        self._dedup_cache = MessageDedupCache()
 
         if self._explicit_db_path == ":memory:":
             self._mem_conn = sqlite3.connect(":memory:", check_same_thread=False)
@@ -204,6 +244,7 @@ class ConversationService:
                     direction TEXT NOT NULL,
                     message_text TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
+                    channel_message_id TEXT,
                     FOREIGN KEY (conversation_id) REFERENCES conversations (conversation_id)
                 );
             """)
@@ -212,6 +253,13 @@ class ConversationService:
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_conv_id ON conversation_messages (conversation_id);
+            """)
+            try:
+                cursor.execute("ALTER TABLE conversation_messages ADD COLUMN channel_message_id TEXT;")
+            except Exception:
+                pass
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON conversation_messages (channel_message_id);
             """)
             conn.commit()
         else:
@@ -321,8 +369,11 @@ class ConversationService:
         conversation_id: str,
         direction: MessageDirection,
         message_text: str,
+        channel_message_id: Optional[str] = None,
     ) -> ConversationMessage:
         """Appends an incoming or outgoing message to message history."""
+        if channel_message_id:
+            self._dedup_cache.mark_seen(channel_message_id)
         if self._is_supabase_primary:
             try:
                 from services.supabase_repository import SupabaseClient, SupabaseMessageRepository
@@ -332,6 +383,7 @@ class ConversationService:
                     conversation_id=conversation_id,
                     direction=dir_str.upper(),
                     message_text=message_text or "",
+                    channel_message_id=channel_message_id,
                 )
             except Exception:
                 pass
@@ -340,10 +392,10 @@ class ConversationService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO conversation_messages (conversation_id, direction, message_text, timestamp)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO conversation_messages (conversation_id, direction, message_text, timestamp, channel_message_id)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (conversation_id, direction.value, message_text, now_iso),
+                (conversation_id, direction.value, message_text, now_iso, channel_message_id),
             )
             msg_id = cursor.lastrowid
             cursor.execute(
@@ -357,7 +409,54 @@ class ConversationService:
                 direction=direction,
                 message_text=message_text,
                 timestamp=now_iso,
+                channel_message_id=channel_message_id,
             )
+
+    def is_message_processed(self, channel_message_id: Optional[str]) -> bool:
+        """
+        Determines whether a message with the given channel_message_id (e.g. Meta wamid)
+        has already been processed or is currently in-flight.
+        """
+        if not channel_message_id:
+            return False
+
+        # 1. Fast in-memory TTL check
+        if self._dedup_cache.is_duplicate(channel_message_id):
+            return True
+
+        # 2. Supabase persistence check
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseMessageRepository
+                sb = SupabaseClient()
+                repo = SupabaseMessageRepository(sb)
+                existing = repo.get_by_channel_message_id(channel_message_id)
+                if existing:
+                    self._dedup_cache.mark_seen(channel_message_id)
+                    return True
+            except Exception:
+                pass
+
+        # 3. SQLite persistence check
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT 1 FROM conversation_messages WHERE channel_message_id = ? LIMIT 1",
+                    (channel_message_id,),
+                )
+                if cursor.fetchone():
+                    self._dedup_cache.mark_seen(channel_message_id)
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    def mark_message_processing(self, channel_message_id: Optional[str]) -> None:
+        """Marks a message ID as seen/in-flight in the in-memory cache."""
+        if channel_message_id:
+            self._dedup_cache.mark_seen(channel_message_id)
 
     def get_recent_messages(
         self, conversation_id: str, limit: int = 10
@@ -409,6 +508,7 @@ class ConversationService:
                     direction=MessageDirection(r["direction"]),
                     message_text=r["message_text"],
                     timestamp=r["timestamp"],
+                    channel_message_id=r["channel_message_id"] if "channel_message_id" in r.keys() else None,
                 )
                 for r in rows
             ]

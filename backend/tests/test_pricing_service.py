@@ -104,10 +104,10 @@ class TestPricingService(unittest.TestCase):
         self.assertIn("not configured yet", quote.message)
 
     def test_missing_pricing_rule_in_production_singleton(self):
-        # The production singleton has no rules loaded yet (unconnected to Google Sheet)
-        quote = pricing_service.calculate_total("XG-501", 100)
+        # Unconfigured slash-priced combo SKU XG-577 must return unavailable
+        quote = pricing_service.calculate_total("XG-577", 100)
         self.assertFalse(quote.available)
-        self.assertIn("Pricing for *XG-501* is not configured yet. Please contact sales.", quote.message)
+        self.assertIn("Pricing for *XG-577* is not configured yet. Please contact sales.", quote.message)
 
     def test_no_invented_fallback_price(self):
         # Ensure that no fallback/mock price is ever invented when rule is missing
@@ -206,11 +206,11 @@ class TestProductionPricingMaster(unittest.TestCase):
         self.assertEqual(quote.total_price_incl_gst, 48380.0)
         self.assertEqual(quote.pricing_version, "2025")
 
-    def test_xg_501_returns_pricing_unavailable(self):
-        # Older reference SKU XG-501 is absent from 2025 pricing master -> must return unavailable
-        quote = self.pricing.calculate_total("XG-501", 100)
+    def test_unconfigured_combo_returns_pricing_unavailable(self):
+        # Unconfigured slash-priced combo SKU XG-577 must return unavailable
+        quote = self.pricing.calculate_total("XG-577", 100)
         self.assertFalse(quote.available)
-        self.assertIn("Pricing for *XG-501* is not configured yet. Please contact sales.", quote.message)
+        self.assertIn("Pricing for *XG-577* is not configured yet. Please contact sales.", quote.message)
         self.assertIsNone(quote.unit_price_excl_gst)
         self.assertIsNone(quote.total_price_incl_gst)
 
@@ -329,11 +329,10 @@ class TestProductionPricingMaster(unittest.TestCase):
         self.assertIsNone(q1000.bracket_to)
 
     def test_no_fallback_to_catalogue_source_prices(self):
-        # Catalogue master has XG-501 with source_price = 260
-        # Production pricing must NEVER fall back to this price
-        quote = self.pricing.calculate_total("XG-501", 100)
+        # For unconfigured SKUs like XG-577, production pricing must NEVER invent a fallback price
+        quote = self.pricing.calculate_total("XG-577", 100)
         self.assertFalse(quote.available)
-        self.assertNotEqual(quote.unit_price_excl_gst, 260.0)
+        self.assertIsNone(quote.unit_price_excl_gst)
 
     def test_source_provenance_preserved_in_quote_result(self):
         quote = self.pricing.calculate_total("XG-BT-001", 10)

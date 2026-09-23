@@ -1,3 +1,4 @@
+import uuid
 import json
 import os
 import sys
@@ -46,7 +47,7 @@ def make_webhook_payload(body_text: str, sender: str = "919999999991", name: str
                             "messages": [
                                 {
                                     "from": sender,
-                                    "id": f"wamid.{sender}_{abs(hash(body_text))}",
+                                    "id": f"wamid.{sender}_{uuid.uuid4().hex[:12]}",
                                     "timestamp": "1726750000",
                                     "text": {"body": body_text},
                                     "type": "text",

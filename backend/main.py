@@ -251,6 +251,18 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                     message_type = message.get("type")
                     message_id = message.get("id")
 
+                    # Webhook idempotency guard: prevent duplicate processing on Meta retries
+                    if message_id and conversation_service.is_message_processed(message_id):
+                        logger.warning(
+                            "Duplicate webhook message [%s] from [%s] detected; skipping to ensure idempotency.",
+                            message_id,
+                            sender,
+                        )
+                        continue
+
+                    if message_id:
+                        conversation_service.mark_message_processing(message_id)
+
                     if message_type == "text":
                         text_body = message.get("text", {}).get("body", "")
                         logger.info(
@@ -271,6 +283,7 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                                 customer_phone=sender,
                                 message_text=text_body,
                                 customer_name=cust_name,
+                                message_id=message_id,
                             )
                             logger.info(
                                 "Generated agent response for [%s] (Length: %d chars)",
@@ -499,7 +512,7 @@ async def get_orders(
     try:
         from services.supabase_repository import SupabaseClient, SupabaseOrderRepository
         sb = SupabaseClient()
-        if sb.is_configured:
+        if sb.is_configured and not is_testing_environment():
             sb_orders = SupabaseOrderRepository(sb).list_orders()
             if sb_orders:
                 if status:
@@ -578,7 +591,7 @@ async def get_enquiries(limit: int = 50) -> List[Dict[str, Any]]:
     try:
         from services.supabase_repository import SupabaseClient, SupabaseEnquiryRepository
         sb = SupabaseClient()
-        if sb.is_configured:
+        if sb.is_configured and not is_testing_environment():
             sb_enqs = SupabaseEnquiryRepository(sb).list_enquiries(limit=limit)
             if sb_enqs:
                 return sb_enqs

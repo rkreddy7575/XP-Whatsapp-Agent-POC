@@ -30,6 +30,7 @@ class AgentRouter:
         customer_phone: str,
         message_text: str,
         customer_name: Optional[str] = None,
+        message_id: Optional[str] = None,
     ) -> str:
         """
         Main entrypoint for processing incoming customer messages.
@@ -42,7 +43,12 @@ class AgentRouter:
         conv_id = conv.conversation_id
 
         # Persist inbound customer message
-        conversation_service.add_message(conv_id, MessageDirection.INBOUND, message_text or "")
+        conversation_service.add_message(
+            conv_id,
+            MessageDirection.INBOUND,
+            message_text or "",
+            channel_message_id=message_id,
+        )
 
         if not clean_text:
             reply = catalogue_service.resolve_customer_intent(message_text or "")
