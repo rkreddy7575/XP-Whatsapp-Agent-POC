@@ -92,9 +92,13 @@ else:
         "http://127.0.0.1:5173",
     ]
 
+# Allow any Vercel deployment domain (*.vercel.app) as well as configured origins
+cors_origin_regex = os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.vercel\.app").strip()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=cors_origin_regex if cors_origin_regex else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
