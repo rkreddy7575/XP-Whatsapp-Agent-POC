@@ -125,7 +125,8 @@ class TestProductSelectionExperience(unittest.TestCase):
         self.assertIn("100 units", msg2)
         self.assertIn("Subtotal:", msg2)
         self.assertIn("Grand Total:", msg2)
-        self.assertIn("Availability confirmation required", msg2)
+        self.assertIn("Price shown is based on the current catalogue pricing", msg2)
+        self.assertNotIn("Availability confirmation required", msg2)
 
         # Turn 3: Customer confirms order
         resp3 = self.client.post("/webhook", json=make_webhook_payload("confirm", sender=phone))
@@ -173,7 +174,8 @@ class TestProductSelectionExperience(unittest.TestCase):
         self.assertIn(f"Quotation for {sku_2}", msg2)
         self.assertIn("100 units", msg2)
         self.assertIn("Grand Total:", msg2)
-        self.assertIn("Availability confirmation required", msg2)
+        self.assertIn("Price shown is based on the current catalogue pricing", msg2)
+        self.assertNotIn("Availability confirmation required", msg2)
         # Ensure canonical SKU is used, not space-padded raw sheet string
         self.assertNotIn("XG - GS - 002", msg2)
 
@@ -220,7 +222,8 @@ class TestProductSelectionExperience(unittest.TestCase):
         msg2 = mock_send_msg.call_args[1].get("message", "")
         self.assertIn("Quotation for GS-002", msg2)
         self.assertIn("100 units", msg2)
-        self.assertIn("Availability confirmation required", msg2)
+        self.assertIn("Price shown is based on the current catalogue pricing", msg2)
+        self.assertNotIn("Availability confirmation required", msg2)
 
         # Turn 3: Customer confirms order
         resp3 = self.client.post("/webhook", json=make_webhook_payload("confirm", sender=phone))
@@ -260,7 +263,8 @@ class TestProductSelectionExperience(unittest.TestCase):
         msg2 = mock_send_msg.call_args[1].get("message", "")
         self.assertIn("Quotation for GS-002", msg2)
         self.assertIn("100 units", msg2)
-        self.assertIn("Availability confirmation required", msg2)
+        self.assertIn("Price shown is based on the current catalogue pricing", msg2)
+        self.assertNotIn("Availability confirmation required", msg2)
 
         # Turn 3: Customer confirms order
         resp3 = self.client.post("/webhook", json=make_webhook_payload("confirm", sender=phone))

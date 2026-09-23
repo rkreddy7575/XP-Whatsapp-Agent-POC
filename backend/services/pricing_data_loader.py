@@ -366,6 +366,25 @@ class PricingDataLoader:
             )
             records.append(rec)
 
+            # Generate canonical catalogue category alias (XG-T-xxx <-> XG-EL-xxx)
+            t_match = re.match(r"^XG-T-(\d+)$", sku_str.upper())
+            if t_match:
+                el_sku = f"XG-EL-{t_match.group(1)}"
+                el_rec = self._create_record(
+                    sku=el_sku,
+                    category=cat,
+                    price=float(price_val),
+                    gst=gst,
+                    qty_from=1,
+                    qty_to=None,
+                    source_file=fname,
+                    source_sheet="ELECTRONICS",
+                    source_row=r,
+                    source_category=cat,
+                    timestamp=ts,
+                )
+                records.append(el_rec)
+
         wb.close()
         return records
 

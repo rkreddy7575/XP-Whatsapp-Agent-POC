@@ -316,7 +316,8 @@ class TestRichProductPresentation(unittest.TestCase):
         self.assertIn("100 units", quote_msg)
         self.assertIn("Subtotal:", quote_msg)
         self.assertIn("Grand Total:", quote_msg)
-        self.assertIn("Availability confirmation required", quote_msg)
+        self.assertIn("Price shown is based on the current catalogue pricing", quote_msg)
+        self.assertNotIn("Availability confirmation required", quote_msg)
 
         # Turn 3: Customer confirms order
         confirm_payload = {

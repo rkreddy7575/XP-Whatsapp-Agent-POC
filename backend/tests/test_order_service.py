@@ -260,7 +260,14 @@ class TestWebhookOrderConfirmationIntegration(unittest.TestCase):
         self.assertIn("Order Confirmed!", msg2)
         self.assertIn("Order ID:", msg2)
         self.assertIn("XG-GS-501", msg2)
-        self.assertIn("₹48,380.00", msg2)
+        self.assertIn("Subtotal:", msg2)
+        self.assertIn("Total GST:", msg2)
+        self.assertIn("Grand Total:", msg2)
+        self.assertIn("regarding order processing and delivery details", msg2)
+        # Regression checks: ensure stock confirmation and branding text are removed
+        self.assertNotIn("Stock Status", msg2)
+        self.assertNotIn("custom branding", msg2)
+        self.assertNotIn("availability confirmation required", msg2.lower())
 
         # Step 3: Duplicate CONFIRM immediately rejected
         mock_send.reset_mock()

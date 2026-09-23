@@ -144,6 +144,14 @@ class TestPricingService(unittest.TestCase):
         self.assertIn("₹200.00", formatted)
         self.assertIn("₹36.00", formatted)
         self.assertIn("₹23,600.00", formatted)
+        self.assertIn("Price shown is based on the current catalogue pricing", formatted)
+        self.assertNotIn("Availability confirmation required", formatted)
+        self.assertNotIn("Official quote valid subject to stock availability", formatted)
+
+        # When live stock status is provided, it is included dynamically
+        formatted_with_stock = self.pricing.format_quotation(quote, stock_status="📦 *Stock:* Available (450 in stock)")
+        self.assertIn("📦 *Stock:* Available (450 in stock)", formatted_with_stock)
+        self.assertIn("Price shown is based on the current catalogue pricing", formatted_with_stock)
 
     def test_format_quotation_unavailable(self):
         quote = self.pricing.calculate_total("GS-001", 100)
@@ -335,6 +343,27 @@ class TestProductionPricingMaster(unittest.TestCase):
         self.assertIsInstance(quote.source_row, int)
         self.assertEqual(quote.pricing_version, "2025")
 
+
+    def test_xg_el_005_pricing_configured(self):
+        """
+        Regression Test for Issue 2:
+        Verifies that XG-EL-005 pricing is configured and resolvable with valid GST and pricing metadata.
+        Source: ELECTRONICS AUG 2025.xlsx, sheet ELECTRONICS, row 9 (XG-T-005 @ Rs. 250.00).
+        """
+        # Test unit pricing (quantity = 1)
+        quote_1 = pricing_service.calculate_total("XG-EL-005", 1)
+        self.assertTrue(quote_1.available, "XG-EL-005 must be priced")
+        self.assertEqual(quote_1.unit_price_excl_gst, 250.0)
+        self.assertEqual(quote_1.gst_percentage, 18.0)
+        self.assertEqual(quote_1.total_price_incl_gst, 295.0)
+
+        # Test bulk pricing (quantity = 50, matching live test)
+        quote_50 = pricing_service.calculate_total("XG-EL-005", 50)
+        self.assertTrue(quote_50.available)
+        self.assertEqual(quote_50.unit_price_excl_gst, 250.0)
+        self.assertEqual(quote_50.total_price_excl_gst, 12500.0)
+        self.assertEqual(quote_50.total_gst, 2250.0)
+        self.assertEqual(quote_50.total_price_incl_gst, 14750.0)
 
 if __name__ == "__main__":
     unittest.main()

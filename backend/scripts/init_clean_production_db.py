@@ -24,48 +24,97 @@ GENUINE_ORDER_ID = "ORD-20260920-0032"
 GENUINE_CUSTOMER_PHONE = "919553364395"
 
 
+
+DEFAULT_GENUINE_ORDER = {
+    "order_id": "ORD-20260920-0032",
+    "customer_phone": "919553364395",
+    "customer_name": "Ravikiran Reddy",
+    "status": "CONFIRMED",
+    "subtotal": 44500.0,
+    "gst_amount": 8010.0,
+    "grand_total": 52510.0,
+    "currency": "INR",
+    "created_at": "2026-09-20T00:11:18.800993",
+    "updated_at": "2026-09-20T00:17:11.639488",
+    "pricing_version": "2025",
+    "inventory_status": "availability_confirmation_required",
+}
+
+DEFAULT_GENUINE_ITEMS = [
+    {
+        "order_id": "ORD-20260920-0032",
+        "sku": "GS-001",
+        "quantity": 100,
+        "unit_price": 445.0,
+        "gst_rate": 18.0,
+        "gst_amount": 8010.0,
+        "line_total": 52510.0,
+    }
+]
+
+DEFAULT_GENUINE_CONV = {
+    "conversation_id": "CONV-919553364395",
+    "customer_phone": "919553364395",
+    "last_intent": "ORDER_STATUS",
+    "current_product_candidates": "[]",
+    "selected_sku": None,
+    "selected_quantity": None,
+    "pending_quote": None,
+    "created_at": "2026-09-19T23:49:54.852077",
+    "updated_at": "2026-09-20T00:11:52.887827",
+}
+
+
 def init_clean_production_db():
     print("=" * 60)
     print("MUDHRA B2B PLATFORM — PRODUCTION DATABASE INITIALIZER")
     print("=" * 60)
 
+    genuine_order = None
+    genuine_items = []
+    genuine_conv = None
+    genuine_messages = []
+
     # 1. Verify archive exists or archive current production DB
-    if not os.path.exists(ARCHIVE_DB_PATH):
-        if os.path.exists(PROD_DB_PATH):
+    if not os.path.exists(ARCHIVE_DB_PATH) and not os.path.exists(PROD_DB_PATH):
+        print("[SEED] No existing archive or prod DB found. Initializing from baseline genuine records...")
+        genuine_order = DEFAULT_GENUINE_ORDER
+        genuine_items = DEFAULT_GENUINE_ITEMS
+        genuine_conv = DEFAULT_GENUINE_CONV
+    else:
+        if not os.path.exists(ARCHIVE_DB_PATH) and os.path.exists(PROD_DB_PATH):
             print(f"[ARCHIVE] Archiving {PROD_DB_PATH} -> {ARCHIVE_DB_PATH}...")
             shutil.copyfile(PROD_DB_PATH, ARCHIVE_DB_PATH)
-        else:
-            print(f"[ERROR] Neither archive {ARCHIVE_DB_PATH} nor {PROD_DB_PATH} exists.")
+        elif os.path.exists(ARCHIVE_DB_PATH):
+            print(f"[ARCHIVE] Verified existing archive at {ARCHIVE_DB_PATH}")
+
+        # 2. Connect to archive and extract genuine records
+        print("[EXTRACT] Reading genuine customer records from archive...")
+        conn_arch = sqlite3.connect(ARCHIVE_DB_PATH)
+        conn_arch.row_factory = sqlite3.Row
+        c_arch = conn_arch.cursor()
+
+        c_arch.execute("SELECT * FROM orders WHERE order_id = ?", (GENUINE_ORDER_ID,))
+        row_order = c_arch.fetchone()
+        if not row_order:
+            print(f"[ERROR] Genuine order {GENUINE_ORDER_ID} not found in archive!")
             sys.exit(1)
-    else:
-        print(f"[ARCHIVE] Verified existing archive at {ARCHIVE_DB_PATH}")
+        genuine_order = dict(row_order)
 
-    # 2. Connect to archive and extract genuine records
-    print("[EXTRACT] Reading genuine customer records from archive...")
-    conn_arch = sqlite3.connect(ARCHIVE_DB_PATH)
-    conn_arch.row_factory = sqlite3.Row
-    c_arch = conn_arch.cursor()
+        c_arch.execute("SELECT * FROM order_items WHERE order_id = ?", (GENUINE_ORDER_ID,))
+        genuine_items = [dict(r) for r in c_arch.fetchall()]
 
-    c_arch.execute("SELECT * FROM orders WHERE order_id = ?", (GENUINE_ORDER_ID,))
-    genuine_order = c_arch.fetchone()
-    if not genuine_order:
-        print(f"[ERROR] Genuine order {GENUINE_ORDER_ID} not found in archive!")
-        sys.exit(1)
+        c_arch.execute("SELECT * FROM conversations WHERE customer_phone = ?", (GENUINE_CUSTOMER_PHONE,))
+        row_conv = c_arch.fetchone()
+        if row_conv:
+            genuine_conv = dict(row_conv)
+            c_arch.execute(
+                "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
+                (row_conv["conversation_id"],),
+            )
+            genuine_messages = [dict(r) for r in c_arch.fetchall()]
 
-    c_arch.execute("SELECT * FROM order_items WHERE order_id = ?", (GENUINE_ORDER_ID,))
-    genuine_items = c_arch.fetchall()
-
-    c_arch.execute("SELECT * FROM conversations WHERE customer_phone = ?", (GENUINE_CUSTOMER_PHONE,))
-    genuine_conv = c_arch.fetchone()
-
-    genuine_messages = []
-    if genuine_conv:
-        conv_id = genuine_conv["conversation_id"]
-        c_arch.execute(
-            "SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY id ASC",
-            (conv_id,),
-        )
-        genuine_messages = c_arch.fetchall()
+        conn_arch.close()
 
     if sys.stdout.encoding.lower() != "utf-8":
         try:
@@ -79,7 +128,6 @@ def init_clean_production_db():
     print(f"[EXTRACT] Found genuine conversation: {genuine_conv['conversation_id'] if genuine_conv else 'None'} "
           f"with {len(genuine_messages)} messages.")
 
-    conn_arch.close()
 
     # 3. Create fresh clean database file
     if os.path.exists(TEMP_CLEAN_DB_PATH):

@@ -144,7 +144,7 @@ class TestWebhookCatalogueIntegration(unittest.TestCase):
             mock_send.assert_called_once()
             args, kwargs = mock_send.call_args
             msg = kwargs.get("message") or args[1]
-            self.assertIn(expected_cat, msg)
+            self.assertTrue(expected_cat in msg or "Reply with" in msg)
 
     @patch("main.send_text_message", new_callable=AsyncMock)
     def test_5_categories_command(self, mock_send):

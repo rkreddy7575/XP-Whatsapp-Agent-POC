@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -57,8 +58,19 @@ logger = logging.getLogger("whatsapp_agent")
 async def lifespan(app: FastAPI):
     """
     Handles application startup and graceful shutdown lifecycle events.
+    Verifies Supabase primary persistence connection and controls migration fallback.
     """
     logger.info("WhatsApp B2B Corporate Gifting Sales Agent backend starting up...")
+    try:
+        from services.supabase_repository import SupabaseClient
+        sb_client = SupabaseClient()
+        if sb_client.is_configured:
+            logger.info("Supabase Primary Persistence: ACTIVE (URL: %s...)", sb_client.url[:35])
+            logger.info("Persistence Architecture: Supabase (Primary) with SQLite (Controlled Migration Fallback)")
+        else:
+            logger.info("Supabase Primary Persistence: INACTIVE (No production credentials; operating in standalone SQLite fallback mode)")
+    except Exception as exc:
+        logger.warning("Supabase persistence check error: %s", exc)
     yield
     logger.info("WhatsApp B2B Corporate Gifting Sales Agent backend shutting down gracefully...")
 
@@ -171,6 +183,8 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
     """
     raw_body = await request.body()
     app_secret = os.getenv("WHATSAPP_APP_SECRET", "").strip()
+    if app_secret.lower().startswith("replace_"):
+        app_secret = ""
 
     # Meta webhook signature verification (P1)
     sig_header = request.headers.get("X-Hub-Signature-256", "").strip()
@@ -260,7 +274,31 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                                 len(reply_text),
                             )
 
-                            logger.info("Attempting outbound reply to [%s]", sender)
+                            # Dispatch any candidate product image cards sequentially in candidate order
+                            pending_images = agent_router.get_pending_media_messages(sender)
+                            pacing_delay = 0.0 if is_testing_environment() else 0.4
+                            for i, img_msg in enumerate(pending_images):
+                                try:
+                                    logger.info(
+                                        "Attempting outbound image reply to [%s] (SKU: %s, index: %s)",
+                                        sender,
+                                        img_msg.get("sku"),
+                                        img_msg.get("index"),
+                                    )
+                                    await send_image_message(
+                                        to=sender,
+                                        image_url=img_msg["image_url"],
+                                        caption=img_msg.get("caption"),
+                                    )
+                                    if i < len(pending_images) - 1 and pacing_delay > 0:
+                                        await asyncio.sleep(pacing_delay)
+                                except Exception as img_exc:
+                                    logger.warning("Could not send WhatsApp image to [%s]: %s", sender, img_exc)
+
+                            if pending_images and pacing_delay > 0:
+                                await asyncio.sleep(pacing_delay)
+
+                            logger.info("Attempting outbound text reply to [%s]", sender)
                             try:
                                 await send_text_message(to=sender, message=reply_text)
                                 logger.info("Outbound reply sent successfully to [%s]", sender)
@@ -453,8 +491,30 @@ async def get_orders(
     Retrieve all customer orders, optionally filtered by status or search query.
     Sorted newest orders first. Requires owner authentication.
     """
-    orders = order_service.list_all_orders(status=status, search=search)
-    return [order_to_dict(o) for o in orders]
+    local_orders = [order_to_dict(o) for o in order_service.list_all_orders(status=status, search=search)]
+    try:
+        from services.supabase_repository import SupabaseClient, SupabaseOrderRepository
+        sb = SupabaseClient()
+        if sb.is_configured:
+            sb_orders = SupabaseOrderRepository(sb).list_orders()
+            if sb_orders:
+                if status:
+                    sb_orders = [o for o in sb_orders if o.get("status") == status]
+                if search:
+                    q = search.lower()
+                    sb_orders = [
+                        o for o in sb_orders
+                        if q in o.get("order_id", "").lower()
+                        or q in o.get("customer_phone", "").lower()
+                        or q in (o.get("customer_name") or "").lower()
+                    ]
+                # Merge local orders with Supabase orders (avoiding duplicate order_ids)
+                sb_ids = {o.get("order_id") for o in sb_orders}
+                combined = list(sb_orders) + [o for o in local_orders if o.get("order_id") not in sb_ids]
+                return combined
+    except Exception:
+        pass
+    return local_orders
 
 
 @app.get("/api/orders/{order_id}", dependencies=[Depends(verify_dashboard_auth)])
@@ -511,6 +571,136 @@ async def get_enquiries(limit: int = 50) -> List[Dict[str, Any]]:
     including active product selections and pending quotations.
     Requires owner authentication.
     """
+    try:
+        from services.supabase_repository import SupabaseClient, SupabaseEnquiryRepository
+        sb = SupabaseClient()
+        if sb.is_configured:
+            sb_enqs = SupabaseEnquiryRepository(sb).list_enquiries(limit=limit)
+            if sb_enqs:
+                return sb_enqs
+    except Exception:
+        pass
     return conversation_service.list_active_enquiries(limit=limit)
 
 
+
+
+@app.get("/api/dashboard/customers", dependencies=[Depends(verify_dashboard_auth)])
+async def get_customers(limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Retrieve list of corporate customers with order history and contact details.
+    Requires owner authentication.
+    """
+    orders = order_service.list_all_orders()
+    customers_map = {}
+    for o in orders:
+        p = o.customer_phone
+        if p not in customers_map:
+            customers_map[p] = {
+                "phone": p,
+                "name": o.customer_name or "Corporate Client",
+                "orders_count": 0,
+                "total_spend": 0.0,
+                "last_order_date": o.created_at,
+            }
+        customers_map[p]["orders_count"] += 1
+        customers_map[p]["total_spend"] += o.grand_total
+
+    return sorted(list(customers_map.values()), key=lambda x: x["total_spend"], reverse=True)[:limit]
+
+
+@app.get("/api/dashboard/quotes", dependencies=[Depends(verify_dashboard_auth)])
+async def get_quotes(limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Retrieve list of generated quotes for the Owner Dashboard.
+    Requires owner authentication.
+    """
+    from services.supabase_repository import SupabaseClient, SupabaseQuoteRepository
+    sb = SupabaseClient()
+    if sb.is_configured:
+        return SupabaseQuoteRepository(sb).list_quotes(limit=limit)
+
+    # Fallback to active quotation snapshots from active conversations
+    enquiries = conversation_service.list_active_enquiries(limit=limit)
+    quotes = []
+    for enq in enquiries:
+        pq = enq.get("pending_quote")
+        if pq:
+            quotes.append({
+                "quote_number": f"QUO-{enq.get('customer_phone')}",
+                "customer_phone": enq.get("customer_phone"),
+                "sku": enq.get("selected_sku"),
+                "quantity": enq.get("selected_quantity"),
+                "unit_price_excl_gst": pq.get("unit_price_excl_gst"),
+                "gst_percentage": pq.get("gst_percentage"),
+                "total_price_incl_gst": pq.get("total_price_incl_gst"),
+                "status": "ISSUED",
+                "created_at": enq.get("updated_at"),
+            })
+    return quotes[:limit]
+
+
+@app.get("/api/dashboard/conversations/{conversation_id}/detail", dependencies=[Depends(verify_dashboard_auth)])
+async def get_conversation_detail(conversation_id: str) -> Dict[str, Any]:
+    """
+    Full multi-turn conversation detail view for business demo:
+    Shows Customer message -> AI response -> Product candidates -> Selection -> Quote -> Confirmation -> Order created.
+    Requires owner authentication.
+    """
+    conv = conversation_service.get_conversation(conversation_id)
+    if not conv:
+        # Also try searching by phone
+        conv = conversation_service.get_or_create_conversation(conversation_id)
+
+    phone = conv.customer_phone
+    messages = [
+        {
+            "id": m.id,
+            "direction": m.direction.value,
+            "message_text": m.message_text,
+            "timestamp": m.timestamp,
+        }
+        for m in conversation_service.get_recent_messages(conv.conversation_id, limit=50)
+    ]
+
+    # Associated order if confirmed
+    orders = order_service.list_all_orders()
+    matching_order = next((order_to_dict(o) for o in orders if o.customer_phone == phone), None)
+
+    # Structured demo journey milestones
+    journey_steps = []
+    for m in messages:
+        if m["direction"] == "INBOUND":
+            txt = m["message_text"].lower()
+            if any(w in txt for w in ["need", "want", "looking", "gift", "bottle", "pen", "mug", "set"]):
+                journey_steps.append({"milestone": "CUSTOMER_REQUEST", "text": m["message_text"], "time": m["timestamp"]})
+            elif txt in ["1", "2", "3", "4", "5", "first", "second", "third"] or "gs-" in txt or "xg-" in txt:
+                journey_steps.append({"milestone": "CUSTOMER_SELECTION", "text": m["message_text"], "time": m["timestamp"]})
+            elif "confirm" in txt or "yes" in txt or "proceed" in txt:
+                journey_steps.append({"milestone": "CUSTOMER_CONFIRMATION", "text": m["message_text"], "time": m["timestamp"]})
+            else:
+                journey_steps.append({"milestone": "CUSTOMER_MESSAGE", "text": m["message_text"], "time": m["timestamp"]})
+        else:
+            txt = m["message_text"]
+            if "found" in txt.lower() or "matching" in txt.lower():
+                journey_steps.append({"milestone": "PRODUCT_RESULTS", "text": txt, "time": m["timestamp"]})
+            elif "quotation" in txt.lower() or "price" in txt.lower() or "total:" in txt.lower():
+                journey_steps.append({"milestone": "OFFICIAL_QUOTE", "text": txt, "time": m["timestamp"]})
+            elif "order confirmed" in txt.lower() or "ord-" in txt.lower():
+                journey_steps.append({"milestone": "ORDER_CREATED", "text": txt, "time": m["timestamp"]})
+            else:
+                journey_steps.append({"milestone": "AI_RESPONSE", "text": txt, "time": m["timestamp"]})
+
+    return {
+        "conversation_id": conv.conversation_id,
+        "customer_phone": phone,
+        "last_intent": conv.last_intent,
+        "selected_sku": conv.selected_sku,
+        "selected_quantity": conv.selected_quantity,
+        "pending_quote": conv.pending_quote,
+        "created_at": conv.created_at,
+        "updated_at": conv.updated_at,
+        "messages": messages,
+        "order": matching_order,
+        "journey_steps": journey_steps,
+    }

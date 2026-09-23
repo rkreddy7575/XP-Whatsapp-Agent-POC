@@ -161,10 +161,27 @@ class TestInventoryService(unittest.TestCase):
         self.assertEqual(item.reserved_stock, 20)
 
     def test_15_development_provider_disclaimer_in_quote_status(self):
-        # Since development mock provider is not live, get_stock_status_for_quote MUST return confirmation required
+        # Since development mock provider is not live, get_stock_status_for_quote MUST return None (no fake stock claims)
         status_msg = self.inventory.get_stock_status_for_quote("TEST-ITEM-01", 10)
-        self.assertEqual(status_msg, "📦 *Stock:* Availability confirmation required")
+        self.assertIsNone(status_msg)
         self.assertFalse(self.inventory.is_live_provider())
+
+        # When a live inventory provider is connected, get_stock_status_for_quote returns dynamic availability
+        class MockLiveProvider(DevelopmentInventoryProvider):
+            def is_live(self) -> bool:
+                return True
+
+        live_service = InventoryService(
+            provider=MockLiveProvider(
+                initial_items=[
+                    InventoryItem(sku="LIVE-01", physical_stock=100, reserved_stock=10)
+                ]
+            )
+        )
+        self.assertTrue(live_service.is_live_provider())
+        live_status = live_service.get_stock_status_for_quote("LIVE-01", 50)
+        self.assertIsNotNone(live_status)
+        self.assertIn("Available", live_status)
 
     def test_16_mock_file_loads_correctly_in_default_singleton(self):
         # The application default singleton loads from backend/data/inventory_mock.json

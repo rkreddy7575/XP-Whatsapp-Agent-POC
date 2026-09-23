@@ -1,3 +1,4 @@
+import sys
 import json
 import os
 import re
@@ -125,13 +126,31 @@ class PricingService:
         return round(price * (gst_rate / 100.0), 2)
 
     def _lookup_rules(self, clean_key: str) -> List[PriceRule]:
-        """Looks up rules for clean_key, falling back to XG prefix variations."""
+        """Looks up rules for clean_key, falling back to XG prefix and cross-category alias variations."""
         rules = self._rules.get(clean_key, [])
         if not rules:
             if not clean_key.startswith("XG"):
                 rules = self._rules.get(f"XG{clean_key}", [])
             elif clean_key.startswith("XG"):
                 rules = self._rules.get(clean_key[2:], [])
+
+        # Cross-category alias: XG-EL-xxx <-> XG-T-xxx (Electronics / Technology)
+        if not rules:
+            if "EL" in clean_key:
+                t_key = clean_key.replace("EL", "T")
+                rules = self._rules.get(t_key, [])
+                if not rules and not t_key.startswith("XG"):
+                    rules = self._rules.get(f"XG{t_key}", [])
+                elif not rules and t_key.startswith("XG"):
+                    rules = self._rules.get(t_key[2:], [])
+            elif "T" in clean_key:
+                el_key = clean_key.replace("T", "EL")
+                rules = self._rules.get(el_key, [])
+                if not rules and not el_key.startswith("XG"):
+                    rules = self._rules.get(f"XG{el_key}", [])
+                elif not rules and el_key.startswith("XG"):
+                    rules = self._rules.get(el_key[2:], [])
+
         return rules
 
     def get_any_rule_for_sku(self, sku: str) -> Optional[PriceRule]:
@@ -171,6 +190,19 @@ class PricingService:
                 quantity=quantity,
                 message="Invalid request: Please specify a valid product code and positive quantity."
             )
+
+        # Supabase-first pricing lookup if configured
+        if not any("unittest" in str(arg).lower() or "pytest" in str(arg).lower() for arg in sys.argv) or os.getenv("USE_SUPABASE_IN_TESTS") in ("1", "true", "True"):
+            try:
+                from services.supabase_repository import SupabaseClient, SupabasePricingRepository
+                sb = SupabaseClient()
+                if sb.is_configured:
+                    sb_quote = SupabasePricingRepository(sb).calculate_price(clean_sku, quantity)
+                    if sb_quote and sb_quote.available:
+                        sb_quote.sku = clean_sku
+                        return sb_quote
+            except Exception:
+                pass
 
         rule = self.get_price_for_quantity(clean_sku, quantity)
         if not rule:
@@ -250,7 +282,7 @@ class PricingService:
         if stock_status:
             lines.append(f"\n{stock_status}")
 
-        lines.append("\n_Note: Official quote valid subject to stock availability and branding approval._")
+        lines.append("\nℹ️ _Price shown is based on the current catalogue pricing._")
         return "\n".join(lines)
 
     @staticmethod

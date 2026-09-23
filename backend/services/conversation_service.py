@@ -58,6 +58,83 @@ class ConversationService:
             self._ensure_initialized()
 
     @property
+    def _is_supabase_primary(self) -> bool:
+        """Returns True if Supabase is configured and serves as primary persistence."""
+        if self._explicit_db_path == ":memory:":
+            return False
+        if any("unittest" in str(arg).lower() or "pytest" in str(arg).lower() for arg in sys.argv):
+            if os.getenv("USE_SUPABASE_IN_TESTS") not in ("1", "true", "True"):
+                return False
+        try:
+            from services.supabase_repository import SupabaseClient
+            return SupabaseClient().is_configured
+        except Exception:
+            return False
+
+    def _sb_dict_to_conversation(self, sb_dict: Dict[str, Any]) -> Conversation:
+        """Converts a Supabase conversation record into a Conversation domain object."""
+        candidates = sb_dict.get("current_product_candidates") or []
+        if isinstance(candidates, str):
+            try:
+                candidates = json.loads(candidates)
+            except Exception:
+                candidates = []
+        pending_quote = sb_dict.get("pending_quote")
+        if isinstance(pending_quote, str):
+            try:
+                pending_quote = json.loads(pending_quote)
+            except Exception:
+                pending_quote = None
+
+        return Conversation(
+            conversation_id=sb_dict.get("conversation_id", ""),
+            customer_phone=sb_dict.get("customer_phone", ""),
+            last_intent=sb_dict.get("last_intent"),
+            current_product_candidates=candidates,
+            selected_sku=sb_dict.get("selected_sku"),
+            selected_quantity=sb_dict.get("selected_quantity"),
+            pending_quote=pending_quote,
+            created_at=sb_dict.get("created_at", ""),
+            updated_at=sb_dict.get("updated_at", ""),
+        )
+
+    def _sync_conv_to_sqlite(self, sb_conv: Dict[str, Any]) -> None:
+        """Controlled fallback sync to SQLite during migration period."""
+        try:
+            clean_phone = self._normalize_phone(sb_conv.get("customer_phone"))
+            conv_id = sb_conv.get("conversation_id", f"CONV-{clean_phone}")
+            candidates = sb_conv.get("current_product_candidates") or []
+            candidates_str = json.dumps(candidates) if isinstance(candidates, list) else str(candidates)
+            pending_str = json.dumps(sb_conv.get("pending_quote")) if sb_conv.get("pending_quote") else None
+            now_iso = datetime.now().isoformat()
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO conversations (
+                        conversation_id, customer_phone, last_intent, current_product_candidates,
+                        selected_sku, selected_quantity, pending_quote, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(conversation_id) DO UPDATE SET
+                        last_intent = excluded.last_intent,
+                        current_product_candidates = excluded.current_product_candidates,
+                        selected_sku = excluded.selected_sku,
+                        selected_quantity = excluded.selected_quantity,
+                        pending_quote = excluded.pending_quote,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        conv_id, clean_phone, sb_conv.get("last_intent"),
+                        candidates_str, sb_conv.get("selected_sku"),
+                        sb_conv.get("selected_quantity"), pending_str,
+                        sb_conv.get("created_at", now_iso), sb_conv.get("updated_at", now_iso)
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    @property
     def db_path(self) -> str:
         if self._explicit_db_path is not None:
             return self._explicit_db_path
@@ -173,6 +250,23 @@ class ConversationService:
         if not clean_phone:
             raise ValueError("Valid customer phone number is required.")
 
+        # Supabase primary persistence
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import (
+                    SupabaseClient,
+                    SupabaseConversationRepository,
+                    SupabaseCustomerRepository,
+                )
+                sb = SupabaseClient()
+                SupabaseCustomerRepository(sb).get_or_create(clean_phone)
+                sb_conv = SupabaseConversationRepository(sb).get_or_create(clean_phone)
+                if sb_conv:
+                    self._sync_conv_to_sqlite(sb_conv)
+                    return self._sb_dict_to_conversation(sb_conv)
+            except Exception as exc:
+                pass
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM conversations WHERE customer_phone = ?", (clean_phone,))
@@ -198,6 +292,15 @@ class ConversationService:
 
     def get_conversation(self, conversation_id: str) -> Optional[Conversation]:
         """Retrieves conversation by conversation_id."""
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
+                sb = SupabaseClient()
+                sb_conv = SupabaseConversationRepository(sb).get_by_id(conversation_id)
+                if sb_conv:
+                    return self._sb_dict_to_conversation(sb_conv)
+            except Exception:
+                pass
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM conversations WHERE conversation_id = ?", (conversation_id,))
@@ -220,6 +323,18 @@ class ConversationService:
         message_text: str,
     ) -> ConversationMessage:
         """Appends an incoming or outgoing message to message history."""
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseMessageRepository
+                sb = SupabaseClient()
+                dir_str = direction.value if hasattr(direction, 'value') else str(direction)
+                SupabaseMessageRepository(sb).add_message(
+                    conversation_id=conversation_id,
+                    direction=dir_str.upper(),
+                    message_text=message_text or "",
+                )
+            except Exception:
+                pass
         now_iso = datetime.now().isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -248,6 +363,31 @@ class ConversationService:
         self, conversation_id: str, limit: int = 10
     ) -> List[ConversationMessage]:
         """Returns the most recent messages in chronological order."""
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseMessageRepository
+                sb = SupabaseClient()
+                sb_msgs = SupabaseMessageRepository(sb).get_messages(conversation_id, limit=limit)
+                if sb_msgs:
+                    res = []
+                    for idx, m in enumerate(sb_msgs, 1):
+                        d_val = m.get("direction", "INBOUND").upper()
+                        try:
+                            md = MessageDirection(d_val)
+                        except Exception:
+                            md = MessageDirection.INBOUND
+                        res.append(
+                            ConversationMessage(
+                                id=m.get("id") or idx,
+                                conversation_id=m.get("conversation_id", conversation_id),
+                                direction=md,
+                                message_text=m.get("message_text", ""),
+                                timestamp=m.get("timestamp", ""),
+                            )
+                        )
+                    return res
+            except Exception:
+                pass
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -277,6 +417,16 @@ class ConversationService:
         self, conversation_id: str, candidates: List[Dict[str, Any]]
     ) -> None:
         """Stores candidate product search results in conversation state."""
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
+                sb = SupabaseClient()
+                SupabaseConversationRepository(sb).update_state(conversation_id, {
+                    "current_product_candidates": candidates or [],
+                    "updated_at": datetime.now().isoformat(),
+                })
+            except Exception:
+                pass
         now_iso = datetime.now().isoformat()
         serialized = json.dumps(candidates)
         with self._get_connection() as conn:
@@ -313,6 +463,16 @@ class ConversationService:
         quantity: Optional[int] = None,
     ) -> None:
         """Sets selected product SKU and optional quantity."""
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
+                sb = SupabaseClient()
+                sb_updates = {"selected_sku": sku, "updated_at": datetime.now().isoformat()}
+                if quantity is not None:
+                    sb_updates["selected_quantity"] = quantity
+                SupabaseConversationRepository(sb).update_state(conversation_id, sb_updates)
+            except Exception:
+                pass
         now_iso = datetime.now().isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -338,6 +498,16 @@ class ConversationService:
 
     def set_selected_quantity(self, conversation_id: str, quantity: int) -> None:
         """Sets selected quantity."""
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
+                sb = SupabaseClient()
+                SupabaseConversationRepository(sb).update_state(conversation_id, {
+                    "selected_quantity": quantity,
+                    "updated_at": datetime.now().isoformat(),
+                })
+            except Exception:
+                pass
         now_iso = datetime.now().isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -361,6 +531,17 @@ class ConversationService:
         else:
             data = {"quote": str(quote)}
 
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
+                sb = SupabaseClient()
+                SupabaseConversationRepository(sb).update_state(conversation_id, {
+                    "pending_quote": data,
+                    "updated_at": now_iso,
+                })
+            except Exception:
+                pass
+
         serialized = json.dumps(data)
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -381,6 +562,16 @@ class ConversationService:
 
     def clear_pending_quote(self, conversation_id: str) -> None:
         """Clears active quote from conversation state."""
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
+                sb = SupabaseClient()
+                SupabaseConversationRepository(sb).update_state(conversation_id, {
+                    "pending_quote": None,
+                    "updated_at": datetime.now().isoformat(),
+                })
+            except Exception:
+                pass
         now_iso = datetime.now().isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -396,6 +587,19 @@ class ConversationService:
 
     def clear_selection(self, conversation_id: str) -> None:
         """Clears current candidates, selection, and pending quote."""
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
+                sb = SupabaseClient()
+                SupabaseConversationRepository(sb).update_state(conversation_id, {
+                    "current_product_candidates": [],
+                    "selected_sku": None,
+                    "selected_quantity": None,
+                    "pending_quote": None,
+                    "updated_at": datetime.now().isoformat(),
+                })
+            except Exception:
+                pass
         now_iso = datetime.now().isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -416,6 +620,16 @@ class ConversationService:
     def update_last_intent(self, conversation_id: str, intent: str) -> None:
         """Updates last identified intent."""
         now_iso = datetime.now().isoformat()
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
+                sb = SupabaseClient()
+                SupabaseConversationRepository(sb).update_state(conversation_id, {
+                    "last_intent": intent,
+                    "updated_at": now_iso,
+                })
+            except Exception:
+                pass
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(

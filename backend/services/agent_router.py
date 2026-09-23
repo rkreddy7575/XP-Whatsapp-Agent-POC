@@ -3,7 +3,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from services.catalogue_service import catalogue_service
+from services.catalogue_service import catalogue_service, is_category_browsing_intent, is_image_request_intent
 from services.conversation_models import MessageDirection
 from services.conversation_service import conversation_service
 from services.gemini_models import IntentType, StructuredIntent
@@ -23,7 +23,7 @@ class AgentRouter:
     """
 
     def __init__(self):
-        pass
+        self._pending_media_messages: Dict[str, List[Dict[str, Any]]] = {}
 
     def handle_incoming_message(
         self,
@@ -69,10 +69,44 @@ class AgentRouter:
             self._finalize_reply(conv_id, IntentType.CONFIRM_ORDER.value, reply)
             return reply
 
-        # Fast-Path C: Active Product Candidate Selection (by index e.g. "1", "2", "second one" or by candidate SKU e.g. "GS-002")
+        # Fast-Path C: Category Browsing ("Categories", "category", "show categories", "browse categories", etc.)
+        if is_category_browsing_intent(clean_text):
+            # Clear old product candidates so subsequent number selection selects category
+            conversation_service.set_candidates(conv_id, [])
+            reply = catalogue_service.format_category_menu()
+            self._finalize_reply(conv_id, "SHOW_CATEGORIES", reply)
+            return reply
+
+        # Fast-Path D: Category Selection (by number when viewing categories OR by direct category name)
+        sel_idx = self._extract_selection_index(clean_text)
+        # Subcase 1: By index when category menu was just displayed or candidates are empty
+        if sel_idx and conv.last_intent == "SHOW_CATEGORIES":
+            cat_from_idx = catalogue_service.get_category_by_index(sel_idx)
+            if cat_from_idx:
+                candidates = catalogue_service.search_products(category=cat_from_idx, limit=5)
+                reply = self._present_product_candidates(
+                    conv_id, customer_phone, candidates, category_title=cat_from_idx
+                )
+                self._finalize_reply(conv_id, IntentType.PRODUCT_SEARCH.value, reply)
+                return reply
+
+        # Subcase 2: By direct category name / alias (e.g. "Gift Sets", "combos", "mugs", "water bottles")
+        matched_cat = catalogue_service.match_category_name(clean_text)
+        if matched_cat:
+            candidates = catalogue_service.search_products(category=matched_cat, limit=5)
+            reply = self._present_product_candidates(
+                conv_id, customer_phone, candidates, category_title=matched_cat
+            )
+            self._finalize_reply(conv_id, IntentType.PRODUCT_SEARCH.value, reply)
+            return reply
+
+        # Fast-Path E0: Image / Photo Request ("can you show me image", "show me images", "photos", etc.)
+        if is_image_request_intent(clean_text):
+            return self._handle_image_request(conv, customer_phone)
+
+        # Fast-Path E: Active Product Candidate Selection (by index e.g. "1", "2", "second one" or by candidate SKU e.g. "GS-002")
         if conv.current_product_candidates:
             # 1. By index
-            sel_idx = self._extract_selection_index(clean_text)
             candidate = None
             if sel_idx and 1 <= sel_idx <= len(conv.current_product_candidates):
                 candidate = conv.current_product_candidates[sel_idx - 1]
@@ -102,7 +136,15 @@ class AgentRouter:
                     self._finalize_reply(conv_id, IntentType.SELECT_PRODUCT.value, reply)
                     return reply
 
-        # Fast-Path D: Direct Exact SKU Discovery (e.g. "GS-002", "XG-501", "GS-001")
+        # Fast-Path E1: Standalone Quantity for Selected Product (e.g. ".50", "50", "100", "50 units", "100 pcs")
+        if conv.selected_sku:
+            standalone_qty = self._extract_standalone_quantity(clean_text)
+            if standalone_qty is not None:
+                reply = self._handle_direct_quote(conv_id, customer_phone, conv.selected_sku, standalone_qty)
+                self._finalize_reply(conv_id, IntentType.PRICE_QUOTE.value, reply)
+                return reply
+
+        # Fast-Path F: Direct Exact SKU Discovery (e.g. "GS-002", "XG-501", "GS-001")
         exact_product = catalogue_service.get_by_sku(clean_text)
         if exact_product:
             canonical_sku = exact_product.get("sku", clean_text)
@@ -124,12 +166,6 @@ class AgentRouter:
                 f"_Note: Reply with the product code and quantity (e.g., *{display_sku} 100*) for an instant quotation._"
             )
             self._finalize_reply(conv_id, IntentType.PRODUCT_DETAILS.value, reply)
-            return reply
-
-        # Fast-Path E: Single-word "categories"
-        if clean_text.lower() in ("categories", "category", "menu"):
-            reply = catalogue_service.format_category_menu()
-            self._finalize_reply(conv_id, IntentType.GENERAL_HELP.value, reply)
             return reply
 
         # Fast-Path F: Pending-quote contextual guidance ("what next", "how to proceed", etc.)
@@ -162,12 +198,198 @@ class AgentRouter:
         self._finalize_reply(conv_id, intent.intent.value, reply)
         return reply
 
+    def _present_product_candidates(
+        self,
+        conv_id: str,
+        customer_phone: str,
+        candidates: List[Dict[str, Any]],
+        category_title: Optional[str] = None,
+        quantity: Optional[int] = None,
+    ) -> str:
+        """
+        Stores candidates, queues rich media cards for WhatsApp, and formats presentation.
+        Avoids duplicate product text when image cards are dispatched.
+        """
+        if not candidates:
+            title_disp = category_title or "that category"
+            return (
+                f"🔍 *No products currently found in \"{title_disp}\".*\n\n"
+                "Reply with *Categories* to explore all available collections."
+            )
+
+        conversation_service.set_candidates(conv_id, candidates)
+        target_qty = quantity or 100
+        if quantity:
+            conversation_service.set_selected_quantity(conv_id, quantity)
+
+        clean_phone = customer_phone.lstrip("+").strip()
+        media_list = self._build_candidate_media_messages(
+            candidates, target_qty=target_qty
+        )
+        self._pending_media_messages[clean_phone] = media_list
+
+        # When all candidates have rich image cards dispatched, send ONE clean selection prompt
+        if len(media_list) == len(candidates) and candidates:
+            if len(candidates) == 1:
+                return "👉 Reply with 1 to select this product."
+            elif len(candidates) == 2:
+                return "👉 Reply with 1 or 2 to select a product."
+            else:
+                nums_str = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
+                return f"👉 Reply with {nums_str} to select a product."
+
+        # If some candidates have images and some do not, only print text for the ones without images
+        if media_list:
+            img_skus = {m["sku"] for m in media_list}
+            text_lines = []
+            for idx, c in enumerate(candidates, 1):
+                if c.get("sku") not in img_skus:
+                    sku = c.get("sku", "")
+                    name = c.get("name") or c.get("category", "Product")
+                    colors = ", ".join(c.get("colors") or [])
+                    opt_str = f"\n   🎨 Options: {colors}" if colors else ""
+                    text_lines.append(f"{idx}️⃣ *{name}*\n   🏷️ SKU: `{sku}`{opt_str}")
+
+            nums_str = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
+            prompt = f"👉 Reply with {nums_str} to select a product."
+            if text_lines:
+                extra = "\n\n".join(text_lines)
+                return f"ℹ️ *Additional options:*\n\n{extra}\n\n{prompt}"
+            return prompt
+
+        return catalogue_service.format_product_presentation(candidates, quantity=quantity)
+
+    def _build_candidate_media_messages(
+        self,
+        candidates: List[Dict[str, Any]],
+        target_qty: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Builds rich WhatsApp image media items with clean captions for candidates with real image URLs.
+        Preserves candidate order strictly (1 -> candidates[0], 2 -> candidates[1], etc.).
+        """
+        emoji_badges = {
+            1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣",
+            6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟"
+        }
+        media_list = []
+        for idx, item in enumerate(candidates, 1):
+            sku = item.get("sku", "")
+            img_url = item.get("image_url") or catalogue_service.get_image_url(sku)
+            if img_url:
+                cat = item.get("category", "")
+                subcat = item.get("subcategory", "")
+                if item.get("name"):
+                    prod_name = item["name"]
+                elif subcat and subcat != cat:
+                    prod_name = f"{cat} — {subcat}"
+                else:
+                    prod_name = cat or "Product"
+
+                badge = emoji_badges.get(idx, f"{idx}.")
+                lines = [
+                    f"{badge} {prod_name}",
+                    f"SKU: {sku}",
+                ]
+                colors = item.get("colors")
+                if colors:
+                    if isinstance(colors, list):
+                        lines.append(f"Options: {', '.join(str(c) for c in colors)}")
+                    elif isinstance(colors, str):
+                        lines.append(f"Options: {colors}")
+
+                caption = "\n".join(lines)
+                media_list.append({
+                    "image_url": img_url,
+                    "caption": caption,
+                    "sku": sku,
+                    "index": idx,
+                })
+        return media_list
+
+    def _handle_image_request(
+        self,
+        conv,
+        customer_phone: str,
+    ) -> str:
+        """
+        Handles requests to view images/photos of current product candidates.
+        Dispatches media messages with real Supabase image URLs and preserves candidate state.
+        If no candidates exist, returns helpful guidance rather than performing a keyword search.
+        """
+        conv_id = conv.conversation_id
+        candidates = conv.current_product_candidates
+
+        if not candidates:
+            reply = (
+                "Sure — tell me the product or category you'd like to see images for (e.g. *Mugs*, *Gift Sets*, or *XG-501*).\n\n"
+                "• Reply with *Categories* to browse all collections."
+            )
+            self._finalize_reply(conv_id, IntentType.GENERAL_HELP.value, reply)
+            return reply
+
+        clean_phone = customer_phone.lstrip("+").strip()
+        target_qty = conv.selected_quantity or 100
+        media_list = self._build_candidate_media_messages(candidates, target_qty=target_qty)
+        self._pending_media_messages[clean_phone] = media_list
+
+        with_img_skus = {m["sku"] for m in media_list}
+        missing_images = [
+            (idx, c) for idx, c in enumerate(candidates, 1)
+            if c.get("sku") not in with_img_skus
+        ]
+
+        if len(media_list) == len(candidates):
+            # All candidates have images
+            if len(candidates) == 1:
+                reply = "👉 Reply with 1 to select this product."
+            elif len(candidates) == 2:
+                reply = "👉 Reply with 1 or 2 to select a product."
+            else:
+                nums_str = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
+                reply = f"👉 Reply with {nums_str} to select a product."
+        elif media_list:
+            # Some candidates have images, some do not
+            missing_lines = []
+            for idx, c in missing_images:
+                sku = c.get("sku", "")
+                name = c.get("name") or c.get("category", "Product")
+                missing_lines.append(f"• *{idx}. {sku}* ({name})")
+            missing_text = "\n".join(missing_lines)
+            reply = (
+                f"📸 *Sent available product photos above.*\n\n"
+                f"ℹ️ *Photos are currently not on file for:*\n"
+                f"{missing_text}\n\n"
+                "Reply with the item number (e.g. *1*, *2*) or product code to select and get an instant quote."
+            )
+        else:
+            # None of the candidates have images on file
+            lines = []
+            for idx, c in enumerate(candidates, 1):
+                sku = c.get("sku", "")
+                name = c.get("name") or c.get("category", "Product")
+                lines.append(f"*{idx}. {sku}* — {name}")
+            list_text = "\n".join(lines)
+            reply = (
+                f"ℹ️ *Photos are not currently on file for these items, but complete specifications and pricing are available:*\n\n"
+                f"{list_text}\n\n"
+                "Reply with the item number (e.g. *1*, *2*) or product code to select and get an instant quote."
+            )
+
+        # Update last_intent to SHOW_IMAGES, but preserve conv.current_product_candidates!
+        self._finalize_reply(conv_id, "SHOW_IMAGES", reply)
+        return reply
+
     @staticmethod
     def _extract_selection_index(text: str) -> Optional[int]:
-        """Extracts 1-based selection index from numeric or ordinal text."""
-        clean = text.strip().lower()
-        if re.match(r"^[1-9]$", clean):
-            return int(clean)
+        """Extracts 1-based selection index from numeric or ordinal text (supports 1..20)."""
+        if not text:
+            return None
+        clean = re.sub(r'[*_~`"\'\u201c\u201d\u2018\u2019]', '', text).strip().lower()
+
+        m_num = re.match(r"^#?([1-9]|1[0-9]|20)\.?$", clean)
+        if m_num:
+            return int(m_num.group(1))
 
         ordinals = {
             "first": 1, "1st": 1, "one": 1,
@@ -175,16 +397,25 @@ class AgentRouter:
             "third": 3, "3rd": 3, "three": 3,
             "fourth": 4, "4th": 4, "four": 4,
             "fifth": 5, "5th": 5, "five": 5,
+            "sixth": 6, "6th": 6, "six": 6,
+            "seventh": 7, "7th": 7, "seven": 7,
+            "eighth": 8, "8th": 8, "eight": 8,
+            "ninth": 9, "9th": 9, "nine": 9,
+            "tenth": 10, "10th": 10, "ten": 10,
         }
-        m = re.search(r"\b(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)\b", clean)
+        m = re.search(r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th)\b", clean)
         if m and m.group(1) in ordinals:
             return ordinals[m.group(1)]
 
-        m_opt = re.search(r"^(?:option|item|choice|number|#)?\s*([1-9])$", clean)
+        m_opt = re.search(r"^(?:option|item|choice|number|#|category)?\s*([1-9]|1[0-9]|20)\.?$", clean)
         if m_opt:
             return int(m_opt.group(1))
 
         return None
+
+    def get_pending_media_messages(self, customer_phone: str) -> List[Dict[str, Any]]:
+        clean_phone = customer_phone.lstrip("+").strip()
+        return self._pending_media_messages.pop(clean_phone, [])
 
     def _finalize_reply(self, conv_id: str, intent_name: str, reply: str) -> None:
         """Persists outbound response and updates conversation metadata."""
@@ -209,6 +440,34 @@ class AgentRouter:
             order_service.set_pending_quote(customer_phone, quote)
             conversation_service.set_pending_quote(conv_id, quote)
             conversation_service.set_selected_product(conv_id, canonical_sku, quantity)
+            # Record quote in SupabaseQuoteRepository if configured
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseQuoteRepository, SupabaseEnquiryRepository
+                sb = SupabaseClient()
+                if sb.is_configured:
+                    SupabaseQuoteRepository(sb).create_quote({
+                        "quote_number": f"QUO-{customer_phone}-{int(datetime.now().timestamp())}",
+                        "customer_phone": customer_phone,
+                        "customer_name": None,
+                        "sku": canonical_sku,
+                        "quantity": quantity,
+                        "unit_price_excl_gst": quote.unit_price_excl_gst,
+                        "gst_percentage": quote.gst_percentage,
+                        "unit_gst": quote.unit_gst,
+                        "unit_price_incl_gst": quote.unit_price_incl_gst,
+                        "total_price_excl_gst": quote.total_price_excl_gst,
+                        "total_gst": quote.total_gst,
+                        "total_price_incl_gst": quote.total_price_incl_gst,
+                        "status": "ISSUED",
+                    })
+                    SupabaseEnquiryRepository(sb).create_enquiry({
+                        "customer_phone": customer_phone,
+                        "sku": canonical_sku,
+                        "quantity": quantity,
+                        "status": "QUOTED",
+                    })
+            except Exception:
+                pass
 
         stock_status = inventory_service.get_stock_status_for_quote(canonical_sku, quantity)
         return pricing_service.format_quotation(quote, stock_status=stock_status, product_name=product_name)
@@ -233,6 +492,19 @@ class AgentRouter:
             order = order_service.confirm_pending_order(customer_phone, customer_name=customer_name)
             conversation_service.clear_pending_quote(conv_id)
             conversation_service.clear_selection(conv_id)
+            # Mark enquiry converted in Supabase if configured
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseEnquiryRepository
+                sb = SupabaseClient()
+                if sb.is_configured:
+                    SupabaseEnquiryRepository(sb).create_enquiry({
+                        "customer_phone": customer_phone,
+                        "sku": pending.sku,
+                        "quantity": pending.quantity,
+                        "status": "CONVERTED",
+                    })
+            except Exception:
+                pass
             return order_service.format_order_confirmation(order)
         else:
             return (
@@ -285,11 +557,9 @@ class AgentRouter:
                 )
 
             if candidates:
-                conversation_service.set_candidates(conv_id, candidates)
-                if intent.quantity:
-                    conversation_service.set_selected_quantity(conv_id, intent.quantity)
-
-                return catalogue_service.format_product_presentation(candidates)
+                return self._present_product_candidates(
+                    conv_id, customer_phone, candidates, quantity=intent.quantity
+                )
             else:
                 search_term = intent.query or intent.category or "that item"
                 return (
@@ -444,6 +714,35 @@ class AgentRouter:
             "Please send a product code and quantity, for example *XG-GS-501 100*, "
             "or reply *categories* to browse our catalogue."
         )
+
+    @staticmethod
+    def _extract_standalone_quantity(text: str) -> Optional[int]:
+        """
+        Extracts a standalone integer quantity from customer text.
+        Handles punctuation typos (e.g. '.50', '50.', ',50', '#50'),
+        plain numbers ('50', '100', '250'),
+        and unit suffixes ('50 units', '100 pcs', '50 pieces', 'qty 50', 'need 100').
+        """
+        if not text:
+            return None
+        clean = text.strip()
+        # Standalone numbers with optional punctuation or unit suffixes
+        m = re.search(
+            r"^\s*[.,#\s]*(?:qty|quantity|need|for|just|around|about)?\s*[:\-]?\s*(\d+)\s*(?:units?|pcs?|pieces?|nos?|items?)?[.,\s]*$",
+            clean,
+            re.IGNORECASE,
+        )
+        if m:
+            val = int(m.group(1))
+            if 1 <= val <= 100000:
+                return val
+        # Explicit "qty: 50" or "quantity is 50"
+        m2 = re.search(r"\b(?:qty|quantity)\s*(?:is|=|:)?\s*(\d+)\b", clean, re.IGNORECASE)
+        if m2:
+            val = int(m2.group(1))
+            if 1 <= val <= 100000:
+                return val
+        return None
 
     @staticmethod
     def _is_next_step_question(text: str) -> bool:

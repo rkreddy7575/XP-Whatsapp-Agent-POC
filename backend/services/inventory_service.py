@@ -53,17 +53,17 @@ class InventoryService:
         """Releases previously reserved stock."""
         return self._provider.release_stock(sku, quantity)
 
-    def get_stock_status_for_quote(self, sku: str, requested_quantity: int) -> str:
+    def get_stock_status_for_quote(self, sku: str, requested_quantity: int) -> Optional[str]:
         """
         Determines customer-facing stock messaging for a WhatsApp quotation.
         
         CRITICAL BUSINESS RULE:
-        If using the development mock provider, the quote MUST NOT claim test quantities
-        are real production availability. Instead, it displays:
-        '📦 Stock: Availability confirmation required'
+        If using the development mock provider, do NOT claim stock quantities or display
+        'Availability confirmation required' on every quote. Return None so the quotation
+        remains clean until a real live inventory provider is connected.
         """
         if not self.is_live_provider():
-            return "📦 *Stock:* Availability confirmation required"
+            return None
 
         # Logic when connected to live Google Sheets in the future:
         availability = self.check_availability(sku, requested_quantity)

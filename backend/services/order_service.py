@@ -3,7 +3,7 @@ import re
 import sqlite3
 import sys
 from datetime import datetime
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from services.order_models import Order, OrderItem, OrderStatus
 from services.pricing_service import PriceQuoteResult
@@ -55,6 +55,55 @@ class OrderService:
             self._init_db(self._mem_conn)
         else:
             self._ensure_initialized()
+
+    @property
+    def _is_supabase_primary(self) -> bool:
+        """Returns True if Supabase is configured and serves as primary persistence."""
+        if self._explicit_db_path == ":memory:":
+            return False
+        if any("unittest" in str(arg).lower() or "pytest" in str(arg).lower() for arg in sys.argv):
+            if os.getenv("USE_SUPABASE_IN_TESTS") not in ("1", "true", "True"):
+                return False
+        try:
+            from services.supabase_repository import SupabaseClient
+            return SupabaseClient().is_configured
+        except Exception:
+            return False
+
+    def _sb_dict_to_order(self, sb_ord: Dict[str, Any]) -> Order:
+        """Converts a Supabase order record into an Order domain object."""
+        items = [
+            OrderItem(
+                sku=it.get("sku", ""),
+                quantity=int(it.get("quantity", 1)),
+                unit_price=float(it.get("unit_price", 0.0)),
+                gst_rate=float(it.get("gst_rate", 18.0)),
+                gst_amount=float(it.get("gst_amount", 0.0)),
+                line_total=float(it.get("line_total", 0.0)),
+            )
+            for it in sb_ord.get("items", [])
+        ]
+        status_val = sb_ord.get("status", "CONFIRMED")
+        try:
+            order_status = OrderStatus(status_val)
+        except Exception:
+            order_status = OrderStatus.CONFIRMED
+
+        return Order(
+            order_id=sb_ord.get("order_id", ""),
+            customer_phone=sb_ord.get("customer_phone", ""),
+            customer_name=sb_ord.get("customer_name"),
+            status=order_status,
+            items=items,
+            subtotal=float(sb_ord.get("subtotal", 0.0)),
+            gst_amount=float(sb_ord.get("gst_amount", 0.0)),
+            grand_total=float(sb_ord.get("grand_total", 0.0)),
+            currency=sb_ord.get("currency", "INR"),
+            created_at=sb_ord.get("created_at", ""),
+            updated_at=sb_ord.get("updated_at", ""),
+            pricing_version=sb_ord.get("pricing_version", "2025"),
+            inventory_status=sb_ord.get("inventory_status", "availability_confirmation_required"),
+        )
 
     @property
     def db_path(self) -> str:
@@ -310,6 +359,40 @@ class OrderService:
             inventory_status="availability_confirmation_required",
         )
 
+        # Supabase primary write
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseOrderRepository
+                sb = SupabaseClient()
+                order_data = {
+                    "order_id": order.order_id,
+                    "customer_phone": order.customer_phone,
+                    "customer_name": order.customer_name,
+                    "status": order.status.value,
+                    "subtotal": order.subtotal,
+                    "gst_amount": order.gst_amount,
+                    "grand_total": order.grand_total,
+                    "currency": order.currency,
+                    "pricing_version": order.pricing_version,
+                    "inventory_status": order.inventory_status,
+                    "notes": "Created via WhatsApp Agent",
+                }
+                items_data = [
+                    {
+                        "sku": itm.sku,
+                        "product_name": itm.sku,
+                        "quantity": itm.quantity,
+                        "unit_price": itm.unit_price,
+                        "gst_rate": itm.gst_rate,
+                        "gst_amount": itm.gst_amount,
+                        "line_total": itm.line_total,
+                    }
+                    for itm in items
+                ]
+                SupabaseOrderRepository(sb).create_order(order_data, items_data)
+            except Exception:
+                pass
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -386,6 +469,45 @@ class OrderService:
             cursor.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,))
             row = cursor.fetchone()
             if not row:
+                try:
+                    from services.supabase_repository import SupabaseClient, SupabaseOrderRepository
+                    sb = SupabaseClient()
+                    if sb.is_configured:
+                        sb_ord = SupabaseOrderRepository(sb).get_by_id(order_id)
+                        if sb_ord:
+                            items = [
+                                OrderItem(
+                                    sku=it.get("sku", ""),
+                                    quantity=it.get("quantity", 1),
+                                    unit_price=float(it.get("unit_price", 0.0)),
+                                    gst_rate=float(it.get("gst_rate", 18.0)),
+                                    gst_amount=float(it.get("gst_amount", 0.0)),
+                                    line_total=float(it.get("line_total", 0.0)),
+                                )
+                                for it in sb_ord.get("items", [])
+                            ]
+                            status_val = sb_ord.get("status", "CONFIRMED")
+                            try:
+                                st = OrderStatus(status_val)
+                            except Exception:
+                                st = OrderStatus.CONFIRMED
+                            return Order(
+                                order_id=sb_ord.get("order_id", order_id),
+                                customer_phone=sb_ord.get("customer_phone", ""),
+                                customer_name=sb_ord.get("customer_name"),
+                                status=st,
+                                items=items,
+                                subtotal=float(sb_ord.get("subtotal", 0.0)),
+                                gst_amount=float(sb_ord.get("gst_amount", 0.0)),
+                                grand_total=float(sb_ord.get("grand_total", 0.0)),
+                                currency=sb_ord.get("currency", "INR"),
+                                created_at=sb_ord.get("created_at", ""),
+                                updated_at=sb_ord.get("updated_at", ""),
+                                pricing_version=sb_ord.get("pricing_version", "2025"),
+                                inventory_status=sb_ord.get("inventory_status", "CONFIRMED"),
+                            )
+                except Exception:
+                    pass
                 return None
 
             cursor.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,))
@@ -436,6 +558,26 @@ class OrderService:
         status: Optional[str] = None,
         search: Optional[str] = None,
     ) -> List[Order]:
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseOrderRepository
+                sb = SupabaseClient()
+                sb_orders = SupabaseOrderRepository(sb).list_orders()
+                if sb_orders:
+                    orders = [self._sb_dict_to_order(o) for o in sb_orders]
+                    if status:
+                        orders = [o for o in orders if o.status.value == status or o.status == status]
+                    if search:
+                        q = search.lower()
+                        orders = [
+                            o for o in orders
+                            if q in o.order_id.lower()
+                            or q in o.customer_phone.lower()
+                            or (o.customer_name and q in o.customer_name.lower())
+                        ]
+                    return orders
+            except Exception:
+                pass
         """
         Lists orders with optional filtering by status and search query (order_id, customer_phone, customer_name).
         Sorted newest orders first.
@@ -510,14 +652,13 @@ class OrderService:
         )
 
         lines = [
-            "✅ *Order Confirmed!*",
+            "✅ *Order Confirmed!*\n",
             f"📋 *Order ID:* `{order.order_id}`",
-            f"📦 *Product:* {item_desc}",
+            f"📦 *Product:* {item_desc}\n",
             f"🧾 *Subtotal:* ₹{order.subtotal:,.2f}",
             f"📊 *Total GST:* ₹{order.gst_amount:,.2f}",
-            f"💰 *Grand Total:* ₹{order.grand_total:,.2f} *(incl. GST)*\n",
-            "📦 *Stock Status:* Availability confirmation required\n",
-            "_Our corporate gifting team will contact you shortly to confirm stock availability and discuss custom branding/delivery details._",
+            f"💰 *Grand Total:* ₹{order.grand_total:,.2f}\n",
+            "_Our corporate gifting team will contact you shortly regarding order processing and delivery details._",
         ]
         return "\n".join(lines)
 

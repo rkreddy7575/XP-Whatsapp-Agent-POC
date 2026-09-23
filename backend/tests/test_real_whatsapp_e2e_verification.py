@@ -125,6 +125,9 @@ class TestRealGeminiAndWhatsAppE2E(unittest.TestCase):
         test_phrase = "I need 100 gift sets around 500 rupees"
         parsed = real_gemini.parse_intent(test_phrase)
 
+        if parsed.intent == IntentType.UNKNOWN and parsed.notes and any(err in parsed.notes for err in ["503", "429", "UNAVAILABLE", "high demand"]):
+            self.skipTest(f"Gemini API temporarily unavailable (upstream spike): {parsed.notes}")
+
         self.assertIsInstance(parsed, StructuredIntent)
         self.assertIn(
             parsed.intent,
@@ -158,7 +161,7 @@ class TestRealGeminiAndWhatsAppE2E(unittest.TestCase):
         - second product resolves correctly
         - quotation uses PricingService
         - GST comes from PricingService
-        - inventory remains "Availability confirmation required"
+        - quotation displays neutral catalogue pricing note without claiming stock
         - confirmation creates exactly ONE order
         - order is persisted in SQLite
         - price snapshot is preserved
@@ -229,7 +232,8 @@ class TestRealGeminiAndWhatsAppE2E(unittest.TestCase):
         self.assertIn(f"GST ({expected_quote.gst_percentage:.1f}%):", msg_text_2)
 
         # Verify stock status disclaimer
-        self.assertIn("Availability confirmation required", msg_text_2)
+        self.assertIn("Price shown is based on the current catalogue pricing", msg_text_2)
+        self.assertNotIn("Availability confirmation required", msg_text_2)
 
         # ---------------------------------------------------------------------
         # Turn 3: "confirm"
@@ -429,7 +433,8 @@ class TestRealGeminiAndWhatsAppE2E(unittest.TestCase):
         msg1 = mock_send_msg.call_args[1].get("message", "")
         self.assertIn("Quotation for XG-GS-501", msg1)
         self.assertIn("₹48,380.00", msg1)
-        self.assertIn("Availability confirmation required", msg1)
+        self.assertIn("Price shown is based on the current catalogue pricing", msg1)
+        self.assertNotIn("Availability confirmation required", msg1)
 
         # Step 2: Confirm
         confirm_payload = make_webhook_payload("CONFIRM", sender=test_phone)
