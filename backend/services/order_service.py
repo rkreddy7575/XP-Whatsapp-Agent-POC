@@ -622,17 +622,33 @@ class OrderService:
     ) -> Optional[Order]:
         """Updates the status of an existing order."""
         now_iso = datetime.now().isoformat()
+        updated_in_sb = False
+        if self._is_supabase_primary:
+            try:
+                from services.supabase_repository import SupabaseClient, SupabaseOrderRepository
+                sb = SupabaseClient()
+                repo = SupabaseOrderRepository(sb)
+                updated_in_sb = repo.update_status(
+                    order_id=order_id,
+                    new_status=new_status.value,
+                    changed_by="dashboard_owner",
+                )
+            except Exception:
+                pass
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE orders SET status = ?, updated_at = ? WHERE order_id = ?",
                 (new_status.value, now_iso, order_id),
             )
-            if cursor.rowcount == 0:
-                return None
+            sqlite_updated = cursor.rowcount > 0
             conn.commit()
-        return self.get_order(order_id)
 
+        if not updated_in_sb and not sqlite_updated:
+            return None
+
+        return self.get_order(order_id)
     def cancel_order(self, order_id: str) -> Optional[Order]:
         """Convenience method to cancel an existing order."""
         return self.update_order_status(order_id, OrderStatus.CANCELLED)
