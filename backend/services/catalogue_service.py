@@ -741,12 +741,21 @@ class CatalogueService:
     def match_category_name(self, text: str) -> Optional[str]:
         """
         Matches a category name or known alias against the catalogue categories.
+        Supports natural conversational phrasing such as:
+          - "Show Combos", "Show me Combos", "I want Combos", "Browse Combos"
+          - "Show bottles", "Show pens", "Show mugs", "Show gift sets", "Show notebooks"
+          - "Looking for notebooks", "Can I see gift sets", "Combos please"
         Returns the canonical category name or None.
         """
         if not text:
             return None
         clean = re.sub(r'[*_~`"\'\u201c\u201d\u2018\u2019]', '', text).strip().lower()
         clean = re.sub(r'[?!.,;:]+$', '', clean).strip()
+
+        # If it's a general category browsing intent (like "categories", "show categories", "all categories"),
+        # do NOT match it as a single category name!
+        if is_category_browsing_intent(clean):
+            return None
 
         category_aliases = {
             "mugs": "Mugs & Drinkware",
@@ -763,20 +772,30 @@ class CatalogueService:
             "gifts": "Gift Sets",
             "gift": "Gift Sets",
             "giftsets": "Gift Sets",
+            "giftset": "Gift Sets",
+            "corporate gifts": "Gift Sets",
+            "corporate gift": "Gift Sets",
             "combos": "Combos",
             "combo": "Combos",
+            "combo sets": "Combos",
+            "combo set": "Combos",
             "electronics": "Electronics",
             "electronic": "Electronics",
             "gadgets": "Electronics",
+            "gadget": "Electronics",
+            "tech": "Electronics",
             "pens": "Writing Instruments",
             "pen": "Writing Instruments",
-            "metal pens": "Writing Instruments",
             "writing instruments": "Writing Instruments",
             "writing instrument": "Writing Instruments",
             "notebooks": "Notebooks",
             "notebook": "Notebooks",
+            "note book": "Notebooks",
+            "note books": "Notebooks",
             "diaries": "Notebooks",
             "diary": "Notebooks",
+            "journals": "Notebooks",
+            "journal": "Notebooks",
             "keychains": "Keychains",
             "keychain": "Keychains",
             "key chains": "Keychains",
@@ -785,10 +804,13 @@ class CatalogueService:
             "id card": "ID Cards & Accessories",
             "id cards & accessories": "ID Cards & Accessories",
             "id cards and accessories": "ID Cards & Accessories",
+            "lanyards": "ID Cards & Accessories",
+            "lanyard": "ID Cards & Accessories",
             "now go": "Now Go",
             "nowgo": "Now Go",
         }
 
+        # 1. Direct match on clean
         if clean in category_aliases:
             return category_aliases[clean]
 
@@ -800,6 +822,40 @@ class CatalogueService:
                 return cat_name
             for sub in cat.get("subcategories", []):
                 if clean == sub.lower():
+                    return cat_name
+
+        # 2. Strip conversational prefixes & suffixes
+        prefix_pattern = (
+            r'^(?:'
+            r'show\s+me|show|browse|view|see|display|list|give\s+me|give|send\s+me|send|share|'
+            r'tell\s+me\s+about|looking\s+for|look\s+for|i\s+want|i\s+need|i\s+would\s+like|'
+            r'id\s+like|i\s+am\s+looking\s+for|im\s+looking\s+for|can\s+i\s+(?:see|get|view|have)|'
+            r'can\s+you\s+show(?:\s+me)?|can\s+you\s+send(?:\s+me)?|can\s+you\s+share(?:\s+me)?|'
+            r'what\s+about|do\s+you\s+have|any'
+            r')\s+'
+        )
+        clean_stripped = re.sub(prefix_pattern, '', clean).strip()
+        clean_stripped = re.sub(r'^(?:the|all|some|any|a|an)\s+', '', clean_stripped).strip()
+        clean_stripped = re.sub(
+            r'\s+(?:please|pls|plz|option|options|collection|collections|items|item|products|product|catalogue|catalog|range|variety|models|designs)$',
+            '',
+            clean_stripped
+        ).strip()
+
+        if is_category_browsing_intent(clean_stripped):
+            return None
+
+        if clean_stripped in category_aliases:
+            return category_aliases[clean_stripped]
+
+        for cat in self.get_categories():
+            cat_name = cat["category"]
+            if clean_stripped == cat_name.lower():
+                return cat_name
+            if clean_stripped == f"{cat_name.lower()} collection":
+                return cat_name
+            for sub in cat.get("subcategories", []):
+                if clean_stripped == sub.lower():
                     return cat_name
 
         return None

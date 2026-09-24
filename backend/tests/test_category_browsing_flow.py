@@ -281,5 +281,99 @@ class TestCategoryBrowsingFlow(unittest.TestCase):
             self.assertNotIn("No products found matching", reply)
 
 
+    @patch("services.gemini_service.gemini_service.parse_intent")
+    @patch("main.send_text_message", new_callable=AsyncMock)
+    def test_7_conversational_category_browsing_phrases(self, mock_send, mock_gemini):
+        """Natural conversational phrasing routes to category browsing rather than failing keyword search."""
+        test_cases = [
+            ("Show Combos", "Combos"),
+            ("Show me Combos", "Combos"),
+            ("I want Combos", "Combos"),
+            ("Browse Combos", "Combos"),
+            ("Show bottles", "Water Bottles"),
+            ("Show Bottles", "Water Bottles"),
+            ("Show pens", "Writing Instruments"),
+            ("Show Pens", "Writing Instruments"),
+            ("Show mugs", "Mugs & Drinkware"),
+            ("Show gift sets", "Gift Sets"),
+            ("Show Gift Sets", "Gift Sets"),
+            ("Show notebooks", "Notebooks"),
+            ("Show me gift sets", "Gift Sets"),
+            ("Browse bottles", "Water Bottles"),
+        ]
+
+        for phrase, expected_cat in test_cases:
+            mock_send.reset_mock()
+            mock_gemini.reset_mock()
+
+            payload = make_webhook_payload(phrase, sender=self.sender)
+            response = self.client.post("/webhook", json=payload)
+            self.assertEqual(response.status_code, 200)
+
+            mock_send.assert_called_once()
+            msg = mock_send.call_args[1].get("message") or mock_send.call_args[0][1]
+
+            mock_gemini.assert_not_called()
+            self.assertNotIn("No products found matching", msg, f"Failed on phrase: {phrase}")
+            self.assertIn(expected_cat, msg, f"Expected category '{expected_cat}' not found in reply for: {phrase}")
+            self.assertIn("Found", msg, f"Expected 'Found' candidates in reply for: {phrase}")
+
+    def test_8_show_combos_never_reaches_keyword_search(self):
+        """Explicitly verifies 'Show Combos' routes to category filter and never executes literal query search."""
+        with patch.object(catalogue_service, "search_products", wraps=catalogue_service.search_products) as spy_search:
+            reply = agent_router.handle_incoming_message(self.sender, "Show Combos")
+
+            # Check that search_products was called with category="Combos" and not query="Show Combos"
+            for call in spy_search.call_args_list:
+                _, kwargs = call
+                self.assertNotEqual(kwargs.get("query"), "Show Combos")
+                self.assertNotEqual(kwargs.get("query"), "show combos")
+
+            # Check reply contains Combos products and not "No products found"
+            self.assertIn("Combos", reply)
+            self.assertNotIn("No products found matching", reply)
+
+    def test_9_all_canonical_categories_and_search_distinction(self):
+        """Verify all canonical categories match, while product searches and menu queries are distinguished."""
+        canonical_cases = [
+            ("Show Combos", "Combos"),
+            ("Show Water Bottles", "Water Bottles"),
+            ("Show Pens", "Writing Instruments"),
+            ("Show Writing Instruments", "Writing Instruments"),
+            ("Show Mugs", "Mugs & Drinkware"),
+            ("Show Drinkware", "Mugs & Drinkware"),
+            ("Show Gift Sets", "Gift Sets"),
+            ("Show Notebooks", "Notebooks"),
+            ("Show Electronics", "Electronics"),
+            ("Show Keychains", "Keychains"),
+            ("Show ID Cards", "ID Cards & Accessories"),
+            ("Show Now Go", "Now Go"),
+        ]
+        for phrase, expected_cat in canonical_cases:
+            mat = catalogue_service.match_category_name(phrase)
+            self.assertEqual(mat, expected_cat, f"Mismatch for canonical phrase: {phrase}")
+
+        # Normal product searches must NOT be classified as category browsing
+        normal_searches = [
+            "blue bottle",
+            "metal pen",
+            "gift set under 500",
+            "XG-501",
+            "show me XG-501",
+        ]
+        for query in normal_searches:
+            mat = catalogue_service.match_category_name(query)
+            self.assertIsNone(mat, f"Normal search '{query}' incorrectly matched category '{mat}'")
+
+        # Category menu commands must NOT be classified as a single category
+        menu_queries = [
+            "Categories",
+            "Show categories",
+            "Browse categories",
+        ]
+        for q in menu_queries:
+            self.assertTrue(is_category_browsing_intent(q), f"Failed is_category_browsing_intent for '{q}'")
+            self.assertIsNone(catalogue_service.match_category_name(q), f"Menu query '{q}' should return None from match_category_name")
+
 if __name__ == "__main__":
     unittest.main()
