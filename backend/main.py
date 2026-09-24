@@ -291,9 +291,30 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                                 len(reply_text),
                             )
 
+                            # Dispatch text reply FIRST so customer sees complete ordered list immediately
+                            logger.info("Attempting outbound text reply to [%s]", sender)
+                            try:
+                                await send_text_message(to=sender, message=reply_text)
+                                logger.info("Outbound reply sent successfully to [%s]", sender)
+                            except (WhatsAppAPIError, WhatsAppConfigError) as api_err:
+                                logger.error(
+                                    "Failed to send outbound reply to [%s]: %s",
+                                    sender,
+                                    api_err,
+                                )
+                            except Exception as reply_exc:
+                                logger.error(
+                                    "Unexpected error sending outbound reply to [%s]: %s",
+                                    sender,
+                                    reply_exc,
+                                )
+
                             # Dispatch any candidate product image cards sequentially in candidate order
                             pending_images = agent_router.get_pending_media_messages(sender)
                             pacing_delay = 0.0 if is_testing_environment() else 0.4
+                            if pending_images and pacing_delay > 0:
+                                await asyncio.sleep(pacing_delay)
+
                             for i, img_msg in enumerate(pending_images):
                                 try:
                                     logger.info(
@@ -311,26 +332,6 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                                         await asyncio.sleep(pacing_delay)
                                 except Exception as img_exc:
                                     logger.warning("Could not send WhatsApp image to [%s]: %s", sender, img_exc)
-
-                            if pending_images and pacing_delay > 0:
-                                await asyncio.sleep(pacing_delay)
-
-                            logger.info("Attempting outbound text reply to [%s]", sender)
-                            try:
-                                await send_text_message(to=sender, message=reply_text)
-                                logger.info("Outbound reply sent successfully to [%s]", sender)
-                            except (WhatsAppAPIError, WhatsAppConfigError) as api_err:
-                                logger.error(
-                                    "Failed to send outbound reply to [%s]: %s",
-                                    sender,
-                                    api_err,
-                                )
-                            except Exception as reply_exc:
-                                logger.error(
-                                    "Unexpected error sending outbound reply to [%s]: %s",
-                                    sender,
-                                    reply_exc,
-                                )
                     else:
                         logger.info(
                             "Received non-text message (%s) from [%s] (ID: %s)",

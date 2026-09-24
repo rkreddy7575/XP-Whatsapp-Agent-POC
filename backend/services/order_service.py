@@ -265,11 +265,16 @@ class OrderService:
             "PLACE MY ORDER",
             "CONFIRM ORDER",
             "CONFIRM THIS ORDER",
+            "CONFIRM IT",
             "YES PLEASE",
             "YES CONFIRM",
             "OK CONFIRM",
             "PROCEED",
             "APPROVE",
+            "BOOK IT",
+            "GO AHEAD",
+            "GO FOR IT",
+            "PLEASE CONFIRM",
         }
         return clean in exact_matches
 

@@ -42,10 +42,12 @@ class TestMediaOrderingRegression(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"SKU: {expected_skus[idx - 1]}", media_item["caption"])
             self.assertTrue(media_item["caption"].startswith(f"{idx}️⃣") or str(idx) in media_item["caption"])
 
-        # Verify single prompt and no duplicate candidate list in reply text
-        self.assertIn("👉 Reply with 1, 2, 3, 4, or 5 to select a product.", reply)
-        self.assertNotIn("✨ *Found 5 matching products:*", reply)
-        self.assertNotIn("XG-EL-001", reply)
+        # Verify full ordered candidates (1..5) and selection prompt in single logical text response
+        self.assertIn("XG-EL-001", reply)
+        self.assertIn("1️⃣", reply)
+        self.assertIn("5️⃣", reply)
+        self.assertIn("Reply with 1", reply)
+        self.assertIn("show more", reply)
 
     @patch("main.send_image_message", new_callable=AsyncMock)
     @patch("main.send_text_message", new_callable=AsyncMock)

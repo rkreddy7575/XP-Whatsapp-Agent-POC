@@ -1,7 +1,8 @@
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Set
 
 from services.catalogue_service import catalogue_service, is_category_browsing_intent, is_image_request_intent
 from services.conversation_models import MessageDirection
@@ -16,6 +17,87 @@ from services.pricing_service import PriceQuoteResult, pricing_service
 logger = logging.getLogger("agent_router")
 
 
+def is_show_more_intent(text: str) -> bool:
+    """
+    Detects user intent to paginate through product search results
+    (e.g., 'show more', 'more', 'next', 'other options', 'show me more').
+    """
+    if not text:
+        return False
+    clean = text.strip().lower()
+    for ch in ['*', '_', '~', '`', '"', "'", chr(8220), chr(8221), chr(8216), chr(8217)]:
+        clean = clean.replace(ch, '')
+    clean = text.strip().lower()
+    for ch in ['*', '_', '~', '`', '"', "'", chr(8220), chr(8221), chr(8216), chr(8217)]:
+        clean = clean.replace(ch, '')
+
+    exact_phrases = {
+        "show more",
+        "show me more",
+        "more",
+        "next",
+        "next page",
+        "next batch",
+        "more products",
+        "show more products",
+        "anything else",
+        "other options",
+        "more options",
+        "another one",
+        "show another",
+        "show me another",
+        "other products",
+        "see more",
+        "view more",
+        "more items",
+        "different options",
+        "different products",
+        "next options",
+    }
+    if clean in exact_phrases:
+        return True
+
+    patterns = [
+        r"^\s*show\s+(?:me\s+)?more(?:\s+products?|\s+options?|\s+items?)?\s*$",
+        r"^\s*more(?:\s+products?|\s+options?|\s+items?|\s+gift\s+sets?)?\s*$",
+        r"^\s*next(?:\s+page|\s+products?|\s+options?|\s+one|\s+batch)?\s*$",
+        r"^\s*(?:any|anything)\s+else\s*$",
+        r"^\s*(?:other|different)\s+(?:options?|products?|items?)\s*$",
+        r"^\s*(?:show\s+)?another\s+(?:one|product|option)\s*$",
+        r"^\s*(?:see|view)\s+more\s*$",
+    ]
+    return any(re.match(p, clean, re.IGNORECASE) for p in patterns)
+
+
+def is_change_product_intent(text: str) -> bool:
+    """
+    Detects customer intent to return to search results or pick a different product.
+    """
+    if not text:
+        return False
+    clean = text.strip().lower()
+    for ch in ['*', '_', '~', '`', '"', "'", chr(8220), chr(8221), chr(8216), chr(8217)]:
+        clean = clean.replace(ch, '')
+    clean = text.strip().lower()
+    for ch in ['*', '_', '~', '`', '"', "'", chr(8220), chr(8221), chr(8216), chr(8217)]:
+        clean = clean.replace(ch, '')
+
+    exact_phrases = {
+        "change product",
+        "choose another product",
+        "choose another",
+        "different product",
+        "show alternatives",
+        "alternatives",
+        "other product",
+        "choose different product",
+        "pick another",
+        "go back",
+        "back",
+    }
+    return clean in exact_phrases
+
+
 class AgentRouter:
     """
     Orchestration layer connecting customer WhatsApp messages, Gemini NLU intent
@@ -24,6 +106,34 @@ class AgentRouter:
 
     def __init__(self):
         self._pending_media_messages: Dict[str, List[Dict[str, Any]]] = {}
+        self._search_contexts: Dict[str, Dict[str, Any]] = {}
+
+    def _get_search_context(self, clean_phone: str, conv: Any) -> Optional[Dict[str, Any]]:
+        """Retrieves active search context from in-memory cache or candidate metadata."""
+        if clean_phone in self._search_contexts:
+            return self._search_contexts[clean_phone]
+        if conv and conv.current_product_candidates:
+            first = conv.current_product_candidates[0]
+            if isinstance(first, dict):
+                query = first.get("_search_query")
+                category = first.get("_search_category") or first.get("category")
+                max_price = first.get("_search_max_price")
+                all_shown = first.get("_all_shown_skus") or [
+                    c.get("sku") for c in conv.current_product_candidates if isinstance(c, dict) and c.get("sku")
+                ]
+                page = first.get("_search_page", 1)
+                target_qty = first.get("_target_qty") or conv.selected_quantity
+                ctx = {
+                    "query": query,
+                    "category": category,
+                    "max_price": max_price,
+                    "all_shown_skus": all_shown,
+                    "page": page,
+                    "target_qty": target_qty,
+                }
+                self._search_contexts[clean_phone] = ctx
+                return ctx
+        return None
 
     def handle_incoming_message(
         self,
@@ -37,6 +147,7 @@ class AgentRouter:
         Persists message history, updates multi-turn state, and produces authoritative responses.
         """
         clean_text = message_text.strip() if message_text else ""
+        clean_phone = customer_phone.lstrip("+").strip()
 
         # Retrieve or initialize conversation state
         conv = conversation_service.get_or_create_conversation(customer_phone)
@@ -69,7 +180,7 @@ class AgentRouter:
             self._finalize_reply(conv_id, IntentType.PRICE_QUOTE.value, reply)
             return reply
 
-        # Fast-Path B: Deterministic Order Confirmation (e.g. "CONFIRM", "YES")
+        # Fast-Path B: Deterministic Order Confirmation (e.g. "CONFIRM", "YES", "BOOK IT", "GO AHEAD")
         if order_service.is_confirmation_intent(clean_text):
             reply = self._handle_order_confirmation(conv_id, customer_phone, customer_name)
             self._finalize_reply(conv_id, IntentType.CONFIRM_ORDER.value, reply)
@@ -90,6 +201,19 @@ class AgentRouter:
             cat_from_idx = catalogue_service.get_category_by_index(sel_idx)
             if cat_from_idx:
                 candidates = catalogue_service.search_products(category=cat_from_idx, limit=5)
+                all_skus = [c.get("sku") for c in candidates if c.get("sku")]
+                for c in candidates:
+                    c["_search_category"] = cat_from_idx
+                    c["_all_shown_skus"] = all_skus
+                    c["_search_page"] = 1
+                self._search_contexts[clean_phone] = {
+                    "query": None,
+                    "category": cat_from_idx,
+                    "max_price": None,
+                    "all_shown_skus": all_skus,
+                    "page": 1,
+                    "target_qty": None,
+                }
                 reply = self._present_product_candidates(
                     conv_id, customer_phone, candidates, category_title=cat_from_idx
                 )
@@ -100,6 +224,19 @@ class AgentRouter:
         matched_cat = catalogue_service.match_category_name(clean_text)
         if matched_cat:
             candidates = catalogue_service.search_products(category=matched_cat, limit=5)
+            all_skus = [c.get("sku") for c in candidates if c.get("sku")]
+            for c in candidates:
+                c["_search_category"] = matched_cat
+                c["_all_shown_skus"] = all_skus
+                c["_search_page"] = 1
+            self._search_contexts[clean_phone] = {
+                "query": None,
+                "category": matched_cat,
+                "max_price": None,
+                "all_shown_skus": all_skus,
+                "page": 1,
+                "target_qty": None,
+            }
             reply = self._present_product_candidates(
                 conv_id, customer_phone, candidates, category_title=matched_cat
             )
@@ -109,6 +246,19 @@ class AgentRouter:
         # Fast-Path E0: Image / Photo Request ("can you show me image", "show me images", "photos", etc.)
         if is_image_request_intent(clean_text):
             return self._handle_image_request(conv, customer_phone)
+
+        # Fast-Path E_MORE: Pagination Continuation ("show more", "next", "more", "other options", etc.)
+        # If pending quote exists and text is "next", prioritize pending quote guidance
+        if is_show_more_intent(clean_text):
+            if conv.pending_quote and self._is_next_step_question(clean_text):
+                reply = self._pending_quote_guidance(conv)
+                self._finalize_reply(conv_id, IntentType.GENERAL_HELP.value, reply)
+                return reply
+            return self._handle_show_more(conv, customer_phone)
+
+        # Fast-Path E_CHANGE: Change Product / View Alternatives ("another one", "change product", "go back")
+        if is_change_product_intent(clean_text):
+            return self._handle_change_product(conv, customer_phone)
 
         # Fast-Path E: Active Product Candidate Selection (by index e.g. "1", "2", "second one" or by candidate SKU e.g. "GS-002")
         if conv.current_product_candidates:
@@ -135,18 +285,29 @@ class AgentRouter:
                 else:
                     conversation_service.set_selected_product(conv_id, sku)
                     cat = candidate.get("category", "Product")
+                    subcat = candidate.get("subcategory")
+                    name = candidate.get("name") or (f"{cat} – {subcat}" if subcat and subcat != cat else cat)
+                    colors = candidate.get("colors")
+                    color_str = f"\n🎨 *Options:* {', '.join(colors)}" if colors else ""
+
                     reply = (
-                        f"👍 You selected *`{sku}`* ({cat}).\n\n"
-                        f"📦 *Please tell me the quantity you need* (e.g. *100* or *250 units*) for an instant quotation."
+                        f"Great choice! You selected: 🎁\n\n"
+                        f"📦 *Product:* {name}\n"
+                        f"🏷️ *SKU:* `{sku}`\n"
+                        f"📂 *Category:* {cat}{color_str}\n\n"
+                        f"Would you like a quote?\n"
+                        f"🔢 *Please tell me the quantity you need* (e.g. *100* or *250 units*)."
                     )
                     self._finalize_reply(conv_id, IntentType.SELECT_PRODUCT.value, reply)
                     return reply
 
-        # Fast-Path E1: Standalone Quantity for Selected Product (e.g. ".50", "50", "100", "50 units", "100 pcs")
-        if conv.selected_sku:
+        # Fast-Path E1: Standalone Quantity for Selected Product or Active Quote
+        # Handles "100", "what about 50?", "how much for 200?", "for 50 pieces", "200 units", etc.
+        active_sku = conv.selected_sku or (conv.pending_quote.get("sku") if conv.pending_quote else None)
+        if active_sku:
             standalone_qty = self._extract_standalone_quantity(clean_text)
             if standalone_qty is not None:
-                reply = self._handle_direct_quote(conv_id, customer_phone, conv.selected_sku, standalone_qty)
+                reply = self._handle_direct_quote(conv_id, customer_phone, active_sku, standalone_qty)
                 self._finalize_reply(conv_id, IntentType.PRICE_QUOTE.value, reply)
                 return reply
 
@@ -174,7 +335,7 @@ class AgentRouter:
             self._finalize_reply(conv_id, IntentType.PRODUCT_DETAILS.value, reply)
             return reply
 
-        # Fast-Path F: Pending-quote contextual guidance ("what next", "how to proceed", etc.)
+        # Fast-Path G: Pending-quote contextual guidance ("what next", "how to proceed", etc.)
         if conv.pending_quote and self._is_next_step_question(clean_text):
             reply = self._pending_quote_guidance(conv)
             self._finalize_reply(conv_id, IntentType.GENERAL_HELP.value, reply)
@@ -204,6 +365,111 @@ class AgentRouter:
         self._finalize_reply(conv_id, intent.intent.value, reply)
         return reply
 
+    def _handle_show_more(self, conv: Any, customer_phone: str) -> str:
+        """
+        Handles pagination continuation for product searches deterministically.
+        Preserves original search query, category, budget constraints, and avoids repeating SKUs.
+        """
+        conv_id = conv.conversation_id
+        clean_phone = customer_phone.lstrip("+").strip()
+        ctx = self._get_search_context(clean_phone, conv)
+
+        if not ctx or not conv.current_product_candidates:
+            reply = (
+                "I haven't searched for any products yet! 🎁\n\n"
+                "What kind of corporate gifts are you looking for? For example:\n"
+                "• *Gift sets under 500*\n"
+                "• *Water bottles*\n"
+                "• Reply *categories* to browse all collections"
+            )
+            self._finalize_reply(conv_id, IntentType.GENERAL_HELP.value, reply)
+            return reply
+
+        query = ctx.get("query")
+        category = ctx.get("category")
+        max_price = ctx.get("max_price")
+        all_shown = list(ctx.get("all_shown_skus") or [])
+        page = ctx.get("page", 1)
+        target_qty = ctx.get("target_qty") or conv.selected_quantity
+
+        # Query all matches from catalogue
+        all_matches = catalogue_service.search_products(
+            query=query,
+            category=category,
+            max_price=max_price,
+            limit=500,
+        )
+
+        if not all_matches and category:
+            all_matches = catalogue_service.search_products(category=category, limit=500)
+
+        # Exclude already shown SKUs
+        remaining = [p for p in all_matches if p.get("sku") and p.get("sku") not in all_shown]
+
+        if not remaining:
+            cat_name = category or "matching"
+            reply = (
+                f"I've shown all the {cat_name} options I found. "
+                "You can select one of the products above (e.g. *1* to *5*), "
+                "change the budget/category, or search for something else!"
+            )
+            self._finalize_reply(conv_id, IntentType.PRODUCT_SEARCH.value, reply)
+            return reply
+
+        next_batch = remaining[:5]
+        new_shown = all_shown + [p.get("sku") for p in next_batch]
+
+        # Embed search metadata into next_batch items
+        for item in next_batch:
+            item["_search_query"] = query
+            item["_search_category"] = category
+            item["_search_max_price"] = max_price
+            item["_all_shown_skus"] = new_shown
+            item["_search_page"] = page + 1
+            item["_target_qty"] = target_qty
+
+        # Update in-memory search context
+        ctx["all_shown_skus"] = new_shown
+        ctx["page"] = page + 1
+        self._search_contexts[clean_phone] = ctx
+
+        reply = self._present_product_candidates(
+            conv_id,
+            customer_phone,
+            next_batch,
+            category_title=category,
+            quantity=target_qty,
+            is_continuation=True,
+            max_price=max_price,
+        )
+        self._finalize_reply(conv_id, IntentType.PRODUCT_SEARCH.value, reply)
+        return reply
+
+    def _handle_change_product(self, conv: Any, customer_phone: str) -> str:
+        """Handles requests to change product or view alternative candidates."""
+        conv_id = conv.conversation_id
+        conversation_service.set_selected_product(conv_id, None)
+        order_service.clear_pending_quote(customer_phone)
+
+        if conv.current_product_candidates:
+            clean_phone = customer_phone.lstrip("+").strip()
+            ctx = self._get_search_context(clean_phone, conv)
+            cat = ctx.get("category") if ctx else None
+            qty = ctx.get("target_qty") if ctx else conv.selected_quantity
+            reply = self._present_product_candidates(
+                conv_id, customer_phone, conv.current_product_candidates,
+                category_title=cat, quantity=qty, is_continuation=False
+            )
+            self._finalize_reply(conv_id, IntentType.PRODUCT_SEARCH.value, reply)
+            return reply
+
+        reply = (
+            "Sure! Reply with *categories* to browse all collections, "
+            "or tell me what products you are looking for (e.g. *gift sets under 500*)."
+        )
+        self._finalize_reply(conv_id, "SHOW_CATEGORIES", reply)
+        return reply
+
     def _present_product_candidates(
         self,
         conv_id: str,
@@ -211,10 +477,13 @@ class AgentRouter:
         candidates: List[Dict[str, Any]],
         category_title: Optional[str] = None,
         quantity: Optional[int] = None,
+        is_continuation: bool = False,
+        max_price: Optional[float] = None,
     ) -> str:
         """
-        Stores candidates, queues rich media cards for WhatsApp, and formats presentation.
-        Avoids duplicate product text when image cards are dispatched.
+        Stores candidates, queues optional rich media cards for WhatsApp,
+        and formats the complete candidate list in ONE ordered WhatsApp message.
+        Guarantees ordered items (1..5) followed by selection prompt.
         """
         if not candidates:
             title_disp = category_title or "that category"
@@ -229,41 +498,73 @@ class AgentRouter:
             conversation_service.set_selected_quantity(conv_id, quantity)
 
         clean_phone = customer_phone.lstrip("+").strip()
-        media_list = self._build_candidate_media_messages(
-            candidates, target_qty=target_qty
-        )
+
+        # Build media list for optional image dispatch
+        media_list = self._build_candidate_media_messages(candidates, target_qty=target_qty)
         self._pending_media_messages[clean_phone] = media_list
 
-        # When all candidates have rich image cards dispatched, send ONE clean selection prompt
-        if len(media_list) == len(candidates) and candidates:
-            if len(candidates) == 1:
-                return "👉 Reply with 1 to select this product."
-            elif len(candidates) == 2:
-                return "👉 Reply with 1 or 2 to select a product."
+        emoji_badges = {
+            1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣",
+            6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟"
+        }
+
+        price_str = f" under ₹{int(max_price)}" if max_price else ""
+        if is_continuation:
+            cat_display = category_title or "options"
+            header = f"Sure — here are {len(candidates)} more {cat_display}{price_str}:"
+        else:
+            cat_display = category_title or "products"
+            header = f"🎁 *Here are {len(candidates)} {cat_display}{price_str} matching your requirement:*\n_Found {len(candidates)} matching products_"
+
+        items_formatted = []
+        for idx, item in enumerate(candidates, 1):
+            sku = item.get("sku", "N/A")
+            cat = item.get("category", "")
+            subcat = item.get("subcategory", "")
+            if item.get("name"):
+                prod_name = item["name"]
+            elif subcat and subcat != cat:
+                prod_name = f"{cat} – {subcat}"
             else:
-                nums_str = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
-                return f"👉 Reply with {nums_str} to select a product."
+                prod_name = cat or "Corporate Gift"
 
-        # If some candidates have images and some do not, only print text for the ones without images
-        if media_list:
-            img_skus = {m["sku"] for m in media_list}
-            text_lines = []
-            for idx, c in enumerate(candidates, 1):
-                if c.get("sku") not in img_skus:
-                    sku = c.get("sku", "")
-                    name = c.get("name") or c.get("category", "Product")
-                    colors = ", ".join(c.get("colors") or [])
-                    opt_str = f"\n   🎨 Options: {colors}" if colors else ""
-                    text_lines.append(f"{idx}️⃣ *{name}*\n   🏷️ SKU: `{sku}`{opt_str}")
+            badge = emoji_badges.get(idx, f"{idx}️⃣")
+            card_lines = [
+                f"{badge} *{prod_name}*",
+                f"   🏷️ SKU: `{sku}`",
+            ]
 
-            nums_str = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
-            prompt = f"👉 Reply with {nums_str} to select a product."
-            if text_lines:
-                extra = "\n\n".join(text_lines)
-                return f"ℹ️ *Additional options:*\n\n{extra}\n\n{prompt}"
-            return prompt
+            # Pricing indicator
+            if quantity and quantity > 0:
+                try:
+                    quote = pricing_service.calculate_total(sku, quantity)
+                    if quote.available and quote.unit_price_excl_gst:
+                        card_lines.append(
+                            f"   💰 For {quantity} units: ₹{quote.unit_price_excl_gst:,.2f}/unit + {quote.gst_percentage:.0f}% GST\n"
+                            f"   💰 Total: ₹{quote.total_price_incl_gst:,.2f} incl. GST"
+                        )
+                    else:
+                        card_lines.append("   💰 Ask for quantity-based quote")
+                except Exception:
+                    card_lines.append("   💰 Ask for quantity-based quote")
+            else:
+                card_lines.append("   💰 Ask for quantity-based quote")
 
-        return catalogue_service.format_product_presentation(candidates, quantity=quantity)
+            colors = ", ".join(item.get("colors") or [])
+            if colors:
+                card_lines.append(f"   🎨 Options: {colors}")
+
+            items_formatted.append("\n".join(card_lines))
+
+        count = len(candidates)
+        if count == 1:
+            footer = "👉 Reply with 1 to select this product.\n👉 Or reply \"show more\" for more options."
+        elif count == 2:
+            footer = "👉 Reply with 1 or 2 to select a product.\n👉 Or reply \"show more\" for more options."
+        else:
+            footer = f"👉 Reply with 1–{count} to select a product.\n👉 Or reply \"show more\" for more options."
+
+        return f"{header}\n\n" + "\n\n".join(items_formatted) + f"\n\n{footer}"
 
     def _build_candidate_media_messages(
         self,
@@ -271,7 +572,7 @@ class AgentRouter:
         target_qty: int = 100,
     ) -> List[Dict[str, Any]]:
         """
-        Builds rich WhatsApp image media items with clean captions for candidates with real image URLs.
+        Builds rich WhatsApp image media items with concise captions for candidates with real image URLs.
         Preserves candidate order strictly (1 -> candidates[0], 2 -> candidates[1], etc.).
         """
         emoji_badges = {
@@ -288,7 +589,7 @@ class AgentRouter:
                 if item.get("name"):
                     prod_name = item["name"]
                 elif subcat and subcat != cat:
-                    prod_name = f"{cat} — {subcat}"
+                    prod_name = f"{cat} – {subcat}"
                 else:
                     prod_name = cat or "Product"
 
@@ -360,29 +661,21 @@ class AgentRouter:
             for idx, c in missing_images:
                 sku = c.get("sku", "")
                 name = c.get("name") or c.get("category", "Product")
-                missing_lines.append(f"• *{idx}. {sku}* ({name})")
-            missing_text = "\n".join(missing_lines)
+                missing_lines.append(f"{idx}️⃣ *{name}* (SKU: `{sku}`) — _Photo not available_")
+            nums_str = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
             reply = (
-                f"📸 *Sent available product photos above.*\n\n"
-                f"ℹ️ *Photos are currently not on file for:*\n"
-                f"{missing_text}\n\n"
-                "Reply with the item number (e.g. *1*, *2*) or product code to select and get an instant quote."
+                f"📷 Photos sent for the products above.\n\n"
+                f"{'\n'.join(missing_lines)}\n\n"
+                f"👉 Reply with {nums_str} to select a product."
             )
         else:
-            # None of the candidates have images on file
-            lines = []
-            for idx, c in enumerate(candidates, 1):
-                sku = c.get("sku", "")
-                name = c.get("name") or c.get("category", "Product")
-                lines.append(f"*{idx}. {sku}* — {name}")
-            list_text = "\n".join(lines)
+            # None of the candidates have photos available
+            sku_list = ", ".join(f"`{c.get('sku', '')}`" for c in candidates)
             reply = (
-                f"ℹ️ *Photos are not currently on file for these items, but complete specifications and pricing are available:*\n\n"
-                f"{list_text}\n\n"
-                "Reply with the item number (e.g. *1*, *2*) or product code to select and get an instant quote."
+                f"📷 Photos are not currently on file for these items ({sku_list}).\n\n"
+                "You can still select any item to receive a full quotation or specification."
             )
 
-        # Update last_intent to SHOW_IMAGES, but preserve conv.current_product_candidates!
         self._finalize_reply(conv_id, "SHOW_IMAGES", reply)
         return reply
 
@@ -391,7 +684,9 @@ class AgentRouter:
         """Extracts 1-based selection index from numeric or ordinal text (supports 1..20)."""
         if not text:
             return None
-        clean = re.sub(r'[*_~`"\'\u201c\u201d\u2018\u2019]', '', text).strip().lower()
+        clean = text.strip().lower()
+        for ch in ['*', '_', '~', '`', '"', "'", chr(8220), chr(8221), chr(8216), chr(8217)]:
+            clean = clean.replace(ch, '')
 
         m_num = re.match(r"^#?([1-9]|1[0-9]|20)\.?$", clean)
         if m_num:
@@ -432,14 +727,13 @@ class AgentRouter:
         self, conv_id: str, customer_phone: str, sku: str, quantity: int
     ) -> str:
         """Calculates price quote and caches pending quotation in conversation and order services."""
-        # Find canonical product name/category if available
         product = catalogue_service.get_by_sku(sku)
         canonical_sku = product.get("sku", sku) if product else sku
         product_name = None
         if product:
             cat = product.get("category", "")
             subcat = product.get("subcategory", "")
-            product_name = f"{cat} — {subcat}" if subcat and subcat != cat else cat
+            product_name = f"{cat} – {subcat}" if subcat and subcat != cat else cat
 
         quote = pricing_service.calculate_total(canonical_sku, quantity)
         if quote.available:
@@ -482,10 +776,8 @@ class AgentRouter:
         self, conv_id: str, customer_phone: str, customer_name: Optional[str]
     ) -> str:
         """Confirms an active pending quotation into a permanent order."""
-        # Check order_service session or conversation pending quote
         pending = order_service.get_pending_quote(customer_phone)
         if not pending:
-            # Check conversation_service
             raw_quote = conversation_service.get_pending_quote(conv_id)
             if raw_quote:
                 try:
@@ -498,7 +790,6 @@ class AgentRouter:
             order = order_service.confirm_pending_order(customer_phone, customer_name=customer_name)
             conversation_service.clear_pending_quote(conv_id)
             conversation_service.clear_selection(conv_id)
-            # Mark enquiry converted in Supabase if configured
             try:
                 from services.supabase_repository import SupabaseClient, SupabaseEnquiryRepository
                 sb = SupabaseClient()
@@ -514,7 +805,7 @@ class AgentRouter:
             return order_service.format_order_confirmation(order)
         else:
             return (
-                "ℹ️ You don't have an active quotation pending confirmation.\n\n"
+                "⚠️ You don't have an active quotation pending confirmation.\n\n"
                 "Please send a product code and quantity (e.g., *GS-002 100*) to get an instant quote first!"
             )
 
@@ -528,6 +819,7 @@ class AgentRouter:
     ) -> str:
         """Dispatches structured intent to the appropriate deterministic service."""
         conv_id = conv.conversation_id
+        clean_phone = customer_phone.lstrip("+").strip()
 
         # ---------------------------------------------------------------------
         # INTENT: PRODUCT_SEARCH
@@ -563,8 +855,29 @@ class AgentRouter:
                 )
 
             if candidates:
+                all_skus = [c.get("sku") for c in candidates if c.get("sku")]
+                for c in candidates:
+                    c["_search_query"] = intent.query
+                    c["_search_category"] = intent.category
+                    c["_search_max_price"] = intent.budget_per_unit
+                    c["_all_shown_skus"] = all_skus
+                    c["_search_page"] = 1
+                    c["_target_qty"] = intent.quantity
+                self._search_contexts[clean_phone] = {
+                    "query": intent.query,
+                    "category": intent.category,
+                    "max_price": intent.budget_per_unit,
+                    "all_shown_skus": all_skus,
+                    "page": 1,
+                    "target_qty": intent.quantity,
+                }
                 return self._present_product_candidates(
-                    conv_id, customer_phone, candidates, quantity=intent.quantity
+                    conv_id,
+                    customer_phone,
+                    candidates,
+                    category_title=intent.category,
+                    quantity=intent.quantity,
+                    max_price=intent.budget_per_unit,
                 )
             else:
                 search_term = intent.query or intent.category or "that item"
@@ -595,9 +908,17 @@ class AgentRouter:
                     return self._handle_direct_quote(conv_id, customer_phone, sku, qty)
                 else:
                     cat = candidate.get("category", "Product")
+                    subcat = candidate.get("subcategory")
+                    name = candidate.get("name") or (f"{cat} – {subcat}" if subcat and subcat != cat else cat)
+                    colors = candidate.get("colors")
+                    color_str = f"\n🎨 *Options:* {', '.join(colors)}" if colors else ""
                     return (
-                        f"👍 You selected *`{sku}`* ({cat}).\n\n"
-                        f"📦 *Please tell me the quantity you need* (e.g. *100* or *250 units*) for an instant quotation."
+                        f"Great choice! You selected: 🎁\n\n"
+                        f"📦 *Product:* {name}\n"
+                        f"🏷️ *SKU:* `{sku}`\n"
+                        f"📂 *Category:* {cat}{color_str}\n\n"
+                        f"Would you like a quote?\n"
+                        f"🔢 *Please tell me the quantity you need* (e.g. *100* or *250 units*)."
                     )
             else:
                 if not conv.current_product_candidates:
@@ -629,12 +950,11 @@ class AgentRouter:
                 return self._handle_direct_quote(conv_id, customer_phone, target_sku, target_qty)
             elif target_sku and not target_qty:
                 conversation_service.set_selected_product(conv_id, target_sku)
-                return f"📦 How many units of *`{target_sku}`* do you need? (e.g. *100*, *250*)"
+                return f"🔢 How many units of *`{target_sku}`* do you need? (e.g. *100*, *250*)"
             elif not target_sku and target_qty:
                 conversation_service.set_selected_quantity(conv_id, target_qty)
                 return f"Got it, {target_qty} units! Which product code or category are you interested in? (e.g. *XG-GS-501* or *gift sets*)"
             else:
-                # If category mentioned, perform search
                 if intent.category or intent.query:
                     intent.intent = IntentType.PRODUCT_SEARCH
                     return self._route_intent(conv, customer_phone, customer_name, message_text, intent)
@@ -664,7 +984,7 @@ class AgentRouter:
         if intent.intent == IntentType.CANCEL_ORDER:
             order_service.clear_pending_quote(customer_phone)
             conversation_service.clear_selection(conv_id)
-            return "🚫 Your active quotation and selections have been cleared. Let me know if you would like to explore anything else!"
+            return "🗑️ Your active quotation and selections have been cleared. Let me know if you would like to explore anything else!"
 
         # ---------------------------------------------------------------------
         # INTENT: ORDER_STATUS
@@ -694,11 +1014,32 @@ class AgentRouter:
         # INTENT: GENERAL_HELP or UNKNOWN
         # ---------------------------------------------------------------------
         if intent.intent == IntentType.GENERAL_HELP:
-            # Safety net: If there's a pending quote, give contextual guidance
-            # instead of the generic welcome message
+            # 1. Active pending quote: give pending quote guidance
             if conv.pending_quote:
                 return self._pending_quote_guidance(conv)
 
+            # 2. Active selected product: ask for quantity for that product
+            if conv.selected_sku:
+                prod = catalogue_service.get_by_sku(conv.selected_sku)
+                name = prod.get("name") if prod else conv.selected_sku
+                return (
+                    f"You have selected *{name}* (`{conv.selected_sku}`).\n\n"
+                    f"🔢 *Please tell me the quantity you need* (e.g. *100* or *250 units*) for an instant quotation.\n\n"
+                    f"Or reply *show more* or *categories* to explore other options."
+                )
+
+            # 3. Active product candidates: guide selection or pagination
+            if conv.current_product_candidates:
+                count = len(conv.current_product_candidates)
+                nums_str = "1" if count == 1 else f"1–{count}"
+                return (
+                    f"I'm here to help! You can:\n"
+                    f"👉 Reply with a number ({nums_str}) to select one of the products above\n"
+                    f"👉 Reply *show more* to see additional options\n"
+                    f"👉 Reply *categories* to explore all collections"
+                )
+
+            # 4. Genuinely new or idle conversation welcome message
             return (
                 "👋 *Welcome to Mudhra Branding Solutions!* 🎁\n\n"
                 "We provide custom-branded corporate gifts, promotional products, and executive sets.\n\n"
@@ -710,10 +1051,31 @@ class AgentRouter:
                 "How can I help you today?"
             )
 
-        # Fallback for UNKNOWN: Delegate to deterministic catalogue discovery
+        # Fallback for UNKNOWN: Delegate to deterministic catalogue discovery first
         cat_reply = catalogue_service.resolve_customer_intent(message_text)
         if cat_reply:
             return cat_reply
+
+        # If not catalogue-related, check active conversation state
+        if conv.pending_quote:
+            return self._pending_quote_guidance(conv)
+        if conv.selected_sku:
+            prod = catalogue_service.get_by_sku(conv.selected_sku)
+            name = prod.get("name") if prod else conv.selected_sku
+            return (
+                f"You have selected *{name}* (`{conv.selected_sku}`).\n\n"
+                f"🔢 *Please tell me the quantity you need* (e.g. *100* or *250 units*) for an instant quotation.\n\n"
+                f"Or reply *show more* or *categories* to explore other options."
+            )
+        if conv.current_product_candidates:
+            count = len(conv.current_product_candidates)
+            nums_str = "1" if count == 1 else f"1–{count}"
+            return (
+                f"I'm here to help! You can:\n"
+                f"👉 Reply with a number ({nums_str}) to select one of the products above\n"
+                f"👉 Reply *show more* to see additional options\n"
+                f"👉 Reply *categories* to explore all collections"
+            )
 
         return (
             "Sorry, I couldn't process that request right now. "
@@ -727,27 +1089,25 @@ class AgentRouter:
         Extracts a standalone integer quantity from customer text.
         Handles punctuation typos (e.g. '.50', '50.', ',50', '#50'),
         plain numbers ('50', '100', '250'),
-        and unit suffixes ('50 units', '100 pcs', '50 pieces', 'qty 50', 'need 100').
+        unit suffixes ('50 units', '100 pcs', '50 pieces', 'qty 50', 'need 100'),
+        and natural questions ('what about 50?', 'how much for 200?', 'price for 200 instead?').
         """
         if not text:
             return None
         clean = text.strip()
-        # Standalone numbers with optional punctuation or unit suffixes
-        m = re.search(
-            r"^\s*[.,#\s]*(?:qty|quantity|need|for|just|around|about)?\s*[:\-]?\s*(\d+)\s*(?:units?|pcs?|pieces?|nos?|items?)?[.,\s]*$",
-            clean,
-            re.IGNORECASE,
-        )
-        if m:
-            val = int(m.group(1))
-            if 1 <= val <= 100000:
-                return val
-        # Explicit "qty: 50" or "quantity is 50"
-        m2 = re.search(r"\b(?:qty|quantity)\s*(?:is|=|:)?\s*(\d+)\b", clean, re.IGNORECASE)
-        if m2:
-            val = int(m2.group(1))
-            if 1 <= val <= 100000:
-                return val
+
+        patterns = [
+            r"^(?:what\s+about|how\s+about|what\s+if|how\s+much\s+for|price\s+for|quote\s+for|can\s+you\s+give\s+(?:me\s+)?(?:the\s+)?price\s+for|make\s+it|change\s+to|for)\s+(\d+)\s*(?:units?|pcs?|pieces?|nos?|items?)?(?:\s+instead|\s+please)?\s*[?.]*$",
+            r"^\s*[.,#\s]*(?:qty|quantity|need|for|just|around|about)?\s*[:\-]?\s*(\d+)\s*(?:units?|pcs?|pieces?|nos?|items?)?(?:\s+instead|\s+please)?\s*[.,?!]*$",
+            r"\b(?:qty|quantity)\s*(?:is|=|:)?\s*(\d+)\b",
+            r"^(\d+)\s+instead\s*[?.]*$",
+        ]
+        for p in patterns:
+            m = re.search(p, clean, re.IGNORECASE)
+            if m:
+                val = int(m.group(1))
+                if 1 <= val <= 100000:
+                    return val
         return None
 
     @staticmethod
@@ -756,9 +1116,7 @@ class AgentRouter:
         Deterministically detects 'what next' / 'how to proceed' style questions.
         Used to avoid Gemini overhead and guarantee correct pending-quote context.
         """
-        clean = text.strip().lower()
-        # Remove leading punctuation/question marks for matching
-        clean = re.sub(r'[^\w\s]', '', clean).strip()
+        clean = re.sub(r'[^\w\s]', '', text.strip().lower()).strip()
 
         next_step_phrases = {
             "what next",
@@ -798,16 +1156,17 @@ class AgentRouter:
         """
         sku = conv.selected_sku or "your selected product"
         qty = conv.selected_quantity
-        qty_str = f" ({qty} units)" if qty else ""
+        qty_str = f" for {qty} units" if qty else ""
 
         return (
-            f"📋 Your quotation for *`{sku}`*{qty_str} is ready.\n\n"
-            "✅ Reply *CONFIRM* to place the order.\n"
-            "🔄 Reply *change quantity* to update the quantity.\n"
-            "🔀 Reply *change product* to select a different product.\n"
-            "❌ Reply *cancel* to clear this quotation.\n\n"
-            "_What would you like to do?_"
+            f"You have an active quote for *`{sku}`*{qty_str}.\n\n"
+            "Here is how you can proceed:\n"
+            "• Reply *CONFIRM* to place your order\n"
+            "• Send a different number to *change quantity* (e.g. *100* or *what about 200*)\n"
+            "• Reply *change product* or *show more* to explore other options\n"
+            "• Reply *cancel* to clear this quote"
         )
 
 
+# Singleton instance for production use
 agent_router = AgentRouter()
