@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
-from services.catalogue_service import catalogue_service, extract_sku_and_quantity_from_inquiry, extract_sku_from_image_request, is_category_browsing_intent, is_image_request_intent
+from services.catalogue_service import catalogue_service, extract_candidate_index_from_image_request, extract_multi_product_requirements, extract_sku_and_quantity_from_inquiry, extract_sku_from_image_request, is_category_browsing_intent, is_image_request_intent
 from services.conversation_models import MessageDirection
 from services.conversation_service import conversation_service
 from services.gemini_models import IntentType, StructuredIntent
@@ -256,9 +256,17 @@ class AgentRouter:
 
         # Fast-Path E0: Image / Photo Request ("can you show me image", "show me images", "photos", etc.)
         # Also handles SKU-specific: "image XG-MP-01", "photo of XG-MP-01", "picture of XG-MP-01", etc.
+        # Also handles candidate-specific: "I need image for 3", "image for 3", "show image 3", etc.
         _image_sku = extract_sku_from_image_request(clean_text)
         if _image_sku or is_image_request_intent(clean_text):
             return self._handle_image_request(conv, customer_phone, clean_text, _image_sku)
+
+        # Fast-Path MULTI_PRODUCT: Multi-Product Requirement Request (e.g. "I need 5 bootles and 10 pens")
+        multi_reqs = extract_multi_product_requirements(clean_text)
+        if multi_reqs:
+            reply = self._handle_multi_product_request(conv_id, customer_phone, multi_reqs)
+            self._finalize_reply(conv_id, IntentType.PRODUCT_SEARCH.value, reply)
+            return reply
 
         # Fast-Path E_MORE: Pagination Continuation ("show more", "next", "more", "other options", etc.)
         # If pending quote exists and text is "next", prioritize pending quote guidance
@@ -674,18 +682,25 @@ class AgentRouter:
     ) -> str:
         """
         Handles requests to view product images/photos.
-        Supports three modes:
-          1. SKU-specific: "image XG-MP-01", "photo of XG-MP-01" -- sends image for that SKU.
-          2. Selected product context: conv.selected_sku when no candidates listed.
-          3. Multiple candidates: "show me image" when product list is displayed.
-        Never invents image URLs. Reports clearly when no image is available.
+        Supports:
+          1. Contextual SKU: explicit image_sku OR candidate index (e.g. 'I need image for 3') OR conv.selected_sku OR conv.pending_quote["sku"]
+          2. Multiple candidates: when product list is displayed and no specific product selected.
+          3. General prompt: when no product context exists.
+        Never invents image URLs. Reports clearly when no image is available without falling into generic catalogue search.
+        Does NOT change the active order/quote/confirmation state.
         """
         conv_id = conv.conversation_id
+        cand_idx = extract_candidate_index_from_image_request(message_text) if message_text else None
+        if not image_sku and cand_idx and conv.current_product_candidates and 1 <= cand_idx <= len(conv.current_product_candidates):
+            target_candidate = conv.current_product_candidates[cand_idx - 1]
+            target_sku = target_candidate.get("sku")
+        else:
+            target_sku = image_sku or conv.selected_sku or (conv.pending_quote.get("sku") if conv.pending_quote else None)
 
-        # --- Mode 1: Explicit SKU in request ("image XG-MP-01", "photo of XG-MP-01") ---
-        if image_sku:
-            product = catalogue_service.get_by_sku(image_sku)
-            canonical_sku = product.get("sku", image_sku) if product else image_sku
+        # --- Contextual or Explicit SKU Resolution ---
+        if target_sku:
+            product = catalogue_service.get_by_sku(target_sku)
+            canonical_sku = product.get("sku", target_sku) if product else target_sku
             image_url = catalogue_service.get_image_url(canonical_sku)
             if image_url:
                 prod_name = ""
@@ -703,52 +718,41 @@ class AgentRouter:
                     "image_url": image_url,
                     "caption": caption,
                 }]
-                reply = (
-                    f"✅ Image for {canonical_sku} is on its way!\n\n"
-                    f"▪️ Reply with *{canonical_sku} 100* (or any quantity) to get an instant quote."
-                )
+                if conv.pending_quote:
+                    reply = (
+                        f"✅ Image for {canonical_sku} is on its way!\n\n"
+                        f"▪️ Reply *CONFIRM* to place this order, or enter a new quantity to update your quote."
+                    )
+                elif image_sku and not conv.selected_sku:
+                    reply = (
+                        f"✅ Image for {canonical_sku} is on its way!\n\n"
+                        f"▪️ Reply with *{canonical_sku} 100* (or any quantity) to get an instant quote."
+                    )
+                else:
+                    reply = (
+                        f"✅ Image for {canonical_sku} is on its way!\n\n"
+                        f"▪️ Reply with a quantity (e.g. *100*) to get an instant quote."
+                    )
             else:
-                reply = (
-                    f"❌ Sorry, I don’t have an image for {canonical_sku} yet.\n\n"
-                    f"▪️ Reply with *{canonical_sku} 100* (or any quantity) to get an instant quote instead."
-                )
+                if conv.pending_quote:
+                    reply = (
+                        f"❌ Sorry, I don’t have an image for {canonical_sku} yet.\n\n"
+                        f"▪️ Reply *CONFIRM* to place this order, or enter a new quantity to update your quote."
+                    )
+                elif image_sku and not conv.selected_sku:
+                    reply = (
+                        f"❌ Sorry, I don’t have an image for {canonical_sku} yet.\n\n"
+                        f"▪️ Reply with *{canonical_sku} 100* (or any quantity) to get an instant quote instead."
+                    )
+                else:
+                    reply = (
+                        f"❌ Sorry, I don’t have an image for {canonical_sku} yet.\n\n"
+                        f"▪️ Reply with a quantity (e.g. *100*) to get an instant quote instead."
+                    )
             self._finalize_reply(conv_id, "SHOW_IMAGES", reply)
             return reply
 
         candidates = conv.current_product_candidates
-
-        # --- Mode 2: Selected product context (no candidates, but product is selected) ---
-        if not candidates and conv.selected_sku:
-            sku = conv.selected_sku
-            image_url = catalogue_service.get_image_url(sku)
-            if image_url:
-                product = catalogue_service.get_by_sku(sku)
-                prod_name = ""
-                if product:
-                    cat = product.get("category", "")
-                    subcat = product.get("subcategory", "")
-                    prod_name = product.get("name") or (
-                        f"{cat} — {subcat}" if subcat and subcat != cat else cat
-                    )
-                clean_phone = customer_phone.lstrip("+").strip()
-                caption = (f"📦 *{prod_name}* ({sku})" if prod_name
-                           else f"📦 {sku}")
-                self._pending_media_messages[clean_phone] = [{
-                    "sku": sku,
-                    "image_url": image_url,
-                    "caption": caption,
-                }]
-                reply = (
-                    f"✅ Image for {sku} is on its way!\n\n"
-                    f"▪️ Reply with a quantity (e.g. *100*) to get an instant quote."
-                )
-            else:
-                reply = (
-                    f"❌ Sorry, I don’t have an image for {sku} yet.\n\n"
-                    f"▪️ Reply with a quantity (e.g. *100*) to get an instant quote instead."
-                )
-            self._finalize_reply(conv_id, "SHOW_IMAGES", reply)
-            return reply
 
         # --- No context at all: ask which product ---
         if not candidates:
@@ -760,7 +764,7 @@ class AgentRouter:
             self._finalize_reply(conv_id, IntentType.GENERAL_HELP.value, reply)
             return reply
 
-        # --- Mode 3: Active candidates -- attempt to send images for all ---
+        # --- Active candidates -- attempt to send images for all ---
         clean_phone = customer_phone.lstrip("+").strip()
         target_qty = conv.selected_quantity or 100
         media_list = self._build_candidate_media_messages(candidates, target_qty=target_qty)
@@ -801,6 +805,7 @@ class AgentRouter:
 
         self._finalize_reply(conv_id, "SHOW_IMAGES", reply)
         return reply
+
     @staticmethod
     def _extract_selection_index(text: str) -> Optional[int]:
         """Extracts 1-based selection index from numeric or ordinal text (supports 1..20)."""
@@ -835,6 +840,112 @@ class AgentRouter:
             return int(m_opt.group(1))
 
         return None
+
+    def _handle_multi_product_request(
+        self,
+        conv_id: str,
+        customer_phone: str,
+        multi_reqs: List[Dict[str, Any]],
+    ) -> str:
+        """
+        Processes multi-product requirements (e.g. "I need 5 bootles and 10 pens").
+        Searches each requirement independently, assigns candidate target quantities,
+        and presents all options in an organized numbered layout.
+        """
+        clean_phone = customer_phone.lstrip("+").strip()
+        all_candidates: List[Dict[str, Any]] = []
+        req_results: List[Dict[str, Any]] = []
+
+        for req in multi_reqs:
+            cat = req.get("category", "")
+            qty = req.get("quantity", 100)
+            raw_term = req.get("raw_term", "")
+
+            # Search by category first, fallback to query
+            cands = catalogue_service.search_products(category=cat, limit=3)
+            if not cands and raw_term:
+                cands = catalogue_service.search_products(query=raw_term, limit=3)
+
+            for c in cands:
+                c["_target_qty"] = qty
+                c["_req_category"] = cat
+
+            req_results.append({
+                "category": cat or raw_term.title(),
+                "quantity": qty,
+                "candidates": cands,
+            })
+            all_candidates.extend(cands)
+
+        # Store all candidates in conversation context
+        conversation_service.set_candidates(conv_id, all_candidates)
+        all_skus = [c.get("sku") for c in all_candidates if c.get("sku")]
+        for c in all_candidates:
+            c["_all_shown_skus"] = all_skus
+            c["_search_page"] = 1
+
+        self._search_contexts[clean_phone] = {
+            "query": None,
+            "category": "Multi-Product Requirement",
+            "max_price": None,
+            "all_shown_skus": all_skus,
+            "page": 1,
+            "target_qty": None,
+        }
+
+        # Build media list for optional image dispatch
+        media_list = self._build_candidate_media_messages(all_candidates, target_qty=100)
+        self._pending_media_messages[clean_phone] = media_list
+
+        emoji_badges = {
+            1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣",
+            6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟"
+        }
+
+        lines = ["📋 *Here are the available options for your requirements:*\n"]
+        overall_idx = 1
+
+        for req_info in req_results:
+            cat_name = req_info["category"]
+            qty = req_info["quantity"]
+            cands = req_info["candidates"]
+
+            lines.append(f"📦 *{cat_name}* (Requirement: *{qty} units*):")
+            if not cands:
+                lines.append("   _No matching products found in catalogue._\n")
+                continue
+
+            for item in cands:
+                sku = item.get("sku", "N/A")
+                cat = item.get("category", "")
+                subcat = item.get("subcategory", "")
+                if item.get("name"):
+                    prod_name = item["name"]
+                elif subcat and subcat != cat:
+                    prod_name = f"{cat} – {subcat}"
+                else:
+                    prod_name = cat or "Corporate Gift"
+
+                badge = emoji_badges.get(overall_idx, f"{overall_idx}️⃣")
+                item_lines = [f"{badge} *{prod_name}* (SKU: `{sku}`)"]
+
+                try:
+                    quote = pricing_service.calculate_total(sku, qty)
+                    if quote.available and quote.unit_price_excl_gst:
+                        item_lines.append(
+                            f"   💰 For {qty} units: ₹{quote.unit_price_excl_gst:,.2f}/unit + {quote.gst_percentage:.0f}% GST"
+                        )
+                except Exception:
+                    pass
+
+                lines.append("\n".join(item_lines))
+                overall_idx += 1
+            lines.append("")
+
+        lines.append(
+            "▪️ Reply with a number (e.g. *1* or *3*) or SKU to view product details, request photos, or customize your quote."
+        )
+        return "\n".join(lines).strip()
 
     def get_pending_media_messages(self, customer_phone: str) -> List[Dict[str, Any]]:
         clean_phone = customer_phone.lstrip("+").strip()

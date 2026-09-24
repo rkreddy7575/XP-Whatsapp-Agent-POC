@@ -313,5 +313,176 @@ class TestImageRequestFlow(unittest.TestCase):
             self.assertNotIn("No products found", reply)
 
 
+    @patch("services.gemini_service.gemini_service.parse_intent")
+    @patch("main.send_image_message", new_callable=AsyncMock)
+    @patch("main.send_text_message", new_callable=AsyncMock)
+    def test_7_contextual_image_request_natural_variations_and_typos(self, mock_send_text, mock_send_image, mock_gemini):
+        """
+        Tests contextual image requests with natural variations and typos, including:
+        'can i hae image for thuis', 'can i have image for this', 'can I get an image',
+        'show me image', 'show photo', 'can you send photo', 'image for this', 'show phoot', 'can you send imaeg'.
+        Verifies image URL is sent for product with image (e.g. XG-BT-001) and graceful unavailable message for product without image (e.g. XG-MP-01).
+        Never falls back to generic catalogue search.
+        """
+        phone = "919876543222"
+        conv = conversation_service.get_or_create_conversation(phone)
+
+        variations = [
+            "can i hae image for thuis",
+            "can i have image for this",
+            "can I get an image",
+            "show me image",
+            "show photo",
+            "can you send photo",
+            "image for this",
+            "show phoot",
+            "can you send imaeg",
+        ]
+
+        for q in variations:
+            conversation_service.set_selected_product(conv.conversation_id, "XG-BT-001", None)
+            mock_send_image.reset_mock()
+            mock_send_text.reset_mock()
+            mock_gemini.reset_mock()
+
+            resp = self.client.post("/webhook", json=make_webhook_payload(q, phone))
+            self.assertEqual(resp.status_code, 200)
+
+            # Gemini intent parser should NOT be called (deterministic fast path)
+            mock_gemini.assert_not_called()
+
+            # Image message should be dispatched for XG-BT-001
+            mock_send_image.assert_called_once()
+            img_url = mock_send_image.call_args.kwargs.get("image_url")
+            self.assertIsNotNone(img_url)
+
+            # Text message should confirm image is sent
+            mock_send_text.assert_called_once()
+            reply = mock_send_text.call_args.kwargs.get("message")
+            self.assertIn("Image for XG-BT-001 is on its way", reply)
+            self.assertNotIn("No products found", reply)
+
+        # Also test product without image (e.g. XG-MP-01)
+        conversation_service.set_selected_product(conv.conversation_id, "XG-MP-01", None)
+        mock_send_image.reset_mock()
+        mock_send_text.reset_mock()
+        mock_gemini.reset_mock()
+        resp = self.client.post("/webhook", json=make_webhook_payload("can i hae image for thuis", phone))
+        self.assertEqual(resp.status_code, 200)
+        mock_gemini.assert_not_called()
+        mock_send_image.assert_not_called()
+        mock_send_text.assert_called_once()
+        reply_no_img = mock_send_text.call_args.kwargs.get("message")
+        self.assertIn("image for XG-MP-01 yet", reply_no_img)
+        self.assertNotIn("No products found", reply_no_img)
+
+    @patch("services.gemini_service.gemini_service.parse_intent")
+    @patch("main.send_image_message", new_callable=AsyncMock)
+    @patch("main.send_text_message", new_callable=AsyncMock)
+    def test_8_contextual_image_request_preserves_quote_and_confirmation_state(self, mock_send_text, mock_send_image, mock_gemini):
+        """
+        Verifies that requesting an image when an active quote exists does NOT reset or corrupt
+        the pending quote or confirmation flow. Customer can confirm right after receiving the image.
+        """
+        phone = "919876543233"
+        # 1. Direct quote for GS-001 100
+        self.client.post("/webhook", json=make_webhook_payload("GS-001 100", phone))
+        conv = conversation_service.get_or_create_conversation(phone)
+        self.assertIsNotNone(conv.pending_quote)
+        self.assertEqual(conv.pending_quote.get("sku"), "GS-001")
+
+        # 2. Customer asks "can i hae image for thuis"
+        mock_send_image.reset_mock()
+        mock_send_text.reset_mock()
+        resp = self.client.post("/webhook", json=make_webhook_payload("can i hae image for thuis", phone))
+        self.assertEqual(resp.status_code, 200)
+
+        # Clear message explaining status
+        reply = mock_send_text.call_args.kwargs.get("message")
+        self.assertIn("CONFIRM", reply)
+        self.assertNotIn("No products found", reply)
+
+        # Quote must remain intact
+        conv = conversation_service.get_or_create_conversation(phone)
+        self.assertIsNotNone(conv.pending_quote)
+        self.assertEqual(conv.pending_quote.get("sku"), "GS-001")
+        self.assertEqual(conv.pending_quote.get("quantity"), 100)
+
+        # 3. Customer confirms order
+        mock_send_text.reset_mock()
+        resp2 = self.client.post("/webhook", json=make_webhook_payload("CONFIRM", phone))
+        self.assertEqual(resp2.status_code, 200)
+        confirm_reply = mock_send_text.call_args.kwargs.get("message")
+        self.assertIn("Order Confirmed", confirm_reply)
+        self.assertIn("GS-001", confirm_reply)
+
+
+
+    @patch("services.gemini_service.gemini_service.parse_intent")
+    @patch("main.send_image_message", new_callable=AsyncMock)
+    @patch("main.send_text_message", new_callable=AsyncMock)
+    def test_9_candidate_numbered_image_request(self, mock_send_text, mock_send_image, mock_gemini):
+        """
+        Verifies that when candidates are displayed, numbered image requests such as:
+        'I need image for 3', 'image for 3', 'show image 3', 'get image for 3'
+        resolve against the current displayed candidate list (e.g. candidate #3), not global catalogue search.
+        """
+        phone = "919876543244"
+        conv = conversation_service.get_or_create_conversation(phone)
+        candidates = [
+            {"sku": "XG-BT-001", "name": "Bottle 1", "category": "Water Bottles"},
+            {"sku": "XG-MP-01", "name": "Pen 1", "category": "Writing Instruments"},
+            {"sku": "XG-BT-003", "name": "Bottle 3", "category": "Water Bottles"},
+        ]
+        conversation_service.set_candidates(conv.conversation_id, candidates)
+
+        image_variations = [
+            "I need image for 3",
+            "image for 3",
+            "show image 3",
+            "get image for 3",
+        ]
+
+        for q in image_variations:
+            mock_send_image.reset_mock()
+            mock_send_text.reset_mock()
+            mock_gemini.reset_mock()
+
+            resp = self.client.post("/webhook", json=make_webhook_payload(q, phone))
+            self.assertEqual(resp.status_code, 200)
+
+            mock_gemini.assert_not_called()
+            mock_send_text.assert_called_once()
+            reply = mock_send_text.call_args.kwargs.get("message")
+            self.assertIn("XG-BT-003", reply)
+            self.assertNotIn("No products found", reply)
+
+    @patch("services.gemini_service.gemini_service.parse_intent")
+    @patch("main.send_image_message", new_callable=AsyncMock)
+    @patch("main.send_text_message", new_callable=AsyncMock)
+    def test_10_contextual_get_me_image_as_well(self, mock_send_text, mock_send_image, mock_gemini):
+        """
+        Verifies contextual image request 'Get me image as well' resolves against selected product / active quote.
+        """
+        phone = "919876543255"
+        conv = conversation_service.get_or_create_conversation(phone)
+        conversation_service.set_selected_product(conv.conversation_id, "XG-BT-001", None)
+
+        mock_send_image.reset_mock()
+        mock_send_text.reset_mock()
+        mock_gemini.reset_mock()
+
+        resp = self.client.post("/webhook", json=make_webhook_payload("Get me image as well", phone))
+        self.assertEqual(resp.status_code, 200)
+
+        mock_gemini.assert_not_called()
+        mock_send_image.assert_called_once()
+        mock_send_text.assert_called_once()
+        reply = mock_send_text.call_args.kwargs.get("message")
+        self.assertIn("Image for XG-BT-001 is on its way", reply)
+        self.assertNotIn("No products found", reply)
+
+
 if __name__ == "__main__":
+
     unittest.main()

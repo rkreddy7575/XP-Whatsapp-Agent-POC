@@ -12,115 +12,275 @@ IMAGE_MAP_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "
 
 def is_category_browsing_intent(text: str) -> bool:
     """
-    Deterministically determines if input represents a category browsing or catalogue menu request.
-    Handles variations, trailing punctuation, and WhatsApp markdown (*bold*, _italic_, quotes).
+    Returns True if the text indicates an intent to view the full category list.
+    Examples: 'categories', 'browse categories', 'show categories', 'view categories', 'show me categories', 'menu'.
     """
     if not text:
         return False
-    # Strip whitespace, quotes, markdown formatting characters (*, _, ~, `, quotes)
-    clean = re.sub(r'[*_~`"\'\u201c\u201d\u2018\u2019]', '', text).strip().lower()
+    clean = text.strip().lower()
+    for ch in ['*', '_', '~', '`', chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217)]:
+        clean = clean.replace(ch, '')
     clean = re.sub(r'[?!.,;:]+$', '', clean).strip()
 
     exact_matches = {
-        'categories', 'category', 'menu', 'catalog', 'catalogue',
-        'all categories', 'list categories', 'view categories',
-        'browse categories', 'show categories', 'show me categories',
-        'what categories do you have', 'what categories do u have',
-        'what are your categories', 'what are the categories',
-        'what categories are available', 'what categories are there',
-        'what categories', 'which categories do you have',
-        'which categories are available', 'show all categories',
-        'browse collections', 'show collections', 'show me collections',
-        'all collections', 'collections', 'collection', 'see categories',
-        'categories list', 'category list', 'browse catalogue',
-        'browse catalog', 'show catalogue', 'show catalog',
-        'view catalogue', 'view catalog', 'our categories',
-        'available categories', 'collections list', 'list collections',
+        'categories', 'category', 'categorys', 'all categories',
+        'show categories', 'show category', 'show all categories',
+        'show me categories', 'show me category', 'show me all categories',
+        'view categories', 'view category', 'view all categories',
+        'view me categories', 'view all collections',
+        'list categories', 'list category', 'list all categories',
+        'browse categories', 'browse category', 'browse all categories',
+        'see categories', 'see category', 'see all categories',
+        'display categories', 'display category',
+        'catalogue', 'catalog', 'collections', 'collection',
+        'all collections', 'browse collections', 'show collections',
+        'what categories', 'what categories do you have',
+        'what products do you have', 'what do you have',
+        'browse', 'menu', 'options', 'main menu',
     }
     if clean in exact_matches:
         return True
 
     patterns = [
-        r'^(?:show|view|browse|list|get|see|display|tell\s+me)\s+(?:all\s+|the\s+|available\s+|our\s+|me\s+)*(?:categories|category|collections|catalogue|catalog)$',
-        r'^(?:what|which)\s+(?:are\s+(?:the\s+|your\s+|available\s+)*)?(?:categories|collections)(?:\s+(?:do\s+(?:you|u)\s+have|are\s+there|are\s+available))?$',
-        r'^(?:can\s+i\s+see|could\s+you\s+show\s+me|give\s+me)\s+(?:the\s+|all\s+|your\s+)*(?:categories|category|catalogue|catalog|collections)$',
+        r'^(?:show|view|list|browse|see|display|get|tell|give)?\s*(?:me\s+|us\s+)?(?:all\s+)?(?:categories|category|collections|catalogue|catalog)\s*(?:list|menu|options)?$',
+        r'^(?:what\s+are\s+(?:your|the)\s+categories|what\s+categories\s+do\s+you\s+have)$',
     ]
     for pat in patterns:
         if re.match(pat, clean):
             return True
     return False
+
+def normalize_image_intent_text(text: str) -> str:
+    """
+    Normalizes text for image/photo intent recognition by stripping markdown formatting,
+    removing punctuation, and fixing common colloquialisms and typos.
+    """
+    if not text:
+        return ""
+    clean = text.strip().lower()
+    for ch in ['*', '_', '~', '`', chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217)]:
+        clean = clean.replace(ch, '')
+    clean = re.sub(r'[?!.,;:]+$', '', clean).strip()
+
+    word_replacements = {
+        r'\bimaeg\b': 'image',
+        r'\bimaegs\b': 'images',
+        r'\bimag\b': 'image',
+        r'\bimags\b': 'images',
+        r'\bimg\b': 'image',
+        r'\bimgs\b': 'images',
+        r'\bphoot\b': 'photo',
+        r'\bphoots\b': 'photos',
+        r'\bpht\b': 'photo',
+        r'\bphts\b': 'photos',
+        r'\bpics?\b': 'photo',
+        r'\bpictures?\b': 'photo',
+        r'\bthuis\b': 'this',
+        r'\bthiz\b': 'this',
+        r'\bdis\b': 'this',
+        r'\bhae\b': 'have',
+        r'\bsnd\b': 'send',
+        r'\bcna\b': 'can',
+        r'\bgt\b': 'get',
+        r'\bu\b': 'you',
+        r'\bplz\b': 'please',
+        r'\bpls\b': 'please',
+        r'\bplss\b': 'please',
+    }
+    for pat, repl in word_replacements.items():
+        clean = re.sub(pat, repl, clean)
+
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean
+
+
+def extract_candidate_index_from_image_request(text: str) -> Optional[int]:
+    """
+    Extracts a 1-based candidate index from an image request (e.g. 'I need image for 3',
+    'image for 3', 'show image 3', 'get image for 3', 'image 3', 'photo for 2', 'third photo').
+    """
+    if not text:
+        return None
+    clean = normalize_image_intent_text(text)
+    image_words = r'(?:images?|photos?|pics?|pictures?)'
+
+    # 1. image/photo [for/of] [option/item/number/#] <N>
+    m1 = re.search(rf'{image_words}\s+(?:for|of|about)?\s*(?:option|item|choice|number|#)?\s*([1-9]|1[0-9]|20)\b', clean)
+    if m1:
+        return int(m1.group(1))
+
+    # 2. [option/item/number/#] <N> image/photo (e.g. '3 image', 'option 3 photo')
+    m2 = re.search(rf'\b(?:option|item|choice|number|#)?\s*([1-9]|1[0-9]|20)\s+{image_words}', clean)
+    if m2:
+        return int(m2.group(1))
+
+    # 3. Ordinals: 'first image', 'image of second one', 'third photo'
+    ordinals = {
+        'first': 1, '1st': 1, 'second': 2, '2nd': 2, 'third': 3, '3rd': 3,
+        'fourth': 4, '4th': 4, 'fifth': 5, '5th': 5, 'sixth': 6, '6th': 6,
+        'seventh': 7, '7th': 7, 'eighth': 8, '8th': 8, 'ninth': 9, '9th': 9,
+        'tenth': 10, '10th': 10
+    }
+    m3 = re.search(rf'\b(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th|ninth|9th|tenth|10th)\b', clean)
+    if m3 and re.search(image_words, clean):
+        return ordinals.get(m3.group(1))
+
+    return None
 
 
 def is_image_request_intent(text: str) -> bool:
     """
-    Deterministically determines if input represents a request to view images/photos/pictures
-    of products. Handles natural variations, punctuation, and WhatsApp markdown (*bold*, _italic_, quotes).
+    Determines if the customer is requesting product images/photos.
+    Fast-path evaluation covering exact phrasing, common typos, and natural variations.
     """
     if not text:
         return False
-    # Strip whitespace, quotes, markdown formatting characters (*, _, ~, `, quotes)
-    clean = re.sub(r'[*_~`"\'\u201c\u201d\u2018\u2019]', '', text).strip().lower()
-    clean = re.sub(r'[?!.,;:]+$', '', clean).strip()
+    clean = normalize_image_intent_text(text)
+    clean_core = re.sub(r'\b(as well|also|too|now|please|pls|kindly)\b', '', clean).strip()
+    clean_core = re.sub(r'\s+', ' ', clean_core)
 
     exact_matches = {
-        'image', 'images', 'photo', 'photos', 'pic', 'pics', 'picture', 'pictures',
-        'product image', 'product images', 'product photo', 'product photos',
-        'product picture', 'product pictures',
-        'show image', 'show images', 'show photo', 'show photos', 'show pic', 'show pics',
-        'show picture', 'show pictures', 'show me image', 'show me images',
-        'show me photo', 'show me photos', 'show me pic', 'show me pics',
-        'show me picture', 'show me pictures',
-        'send image', 'send images', 'send photo', 'send photos', 'send pic', 'send pics',
-        'send picture', 'send pictures', 'send me image', 'send me images',
-        'send me photo', 'send me photos', 'send me pic', 'send me pics',
-        'share image', 'share images', 'share photo', 'share photos', 'share pic', 'share pics',
-        'view image', 'view images', 'view photo', 'view photos',
+        'image', 'images', 'photo', 'photos', 'picture', 'pictures', 'pic', 'pics',
+        'product image', 'product images', 'product photo', 'product photos', 'product picture', 'product pictures',
         'see image', 'see images', 'see photo', 'see photos', 'see picture', 'see pictures',
-        'can i see', 'can i see them', 'can i see it',
-        'can i see the images', 'can i see images', 'can i see photos', 'can i see the photos',
-        'can i see picture', 'can i see pictures', 'can i see the picture', 'can i see the pictures',
-        'can you show me image', 'can you show me images', 'can you show me photo', 'can you show me photos',
-        'can you show me picture', 'can you show me pictures', 'can you show image', 'can you show images',
-        'can you show the picture', 'can you show the pictures', 'can you show the image', 'can you show the images',
-        'can you show picture', 'can you show pictures',
-        'what does it look like', 'what do they look like', 'how does it look', 'how do they look',
-        'do you have images', 'do you have photos', 'do you have pictures',
-        'any images', 'any photos', 'any pictures',
+        'view image', 'view images', 'view photo', 'view photos', 'view picture', 'view pictures',
+        'show image', 'show images', 'show photo', 'show photos', 'show picture', 'show pictures',
+        'show me image', 'show me images', 'show me photo', 'show me photos',
+        'send image', 'send images', 'send photo', 'send photos', 'send picture', 'send pictures',
+        'send me image', 'send me images', 'send me photo', 'send me photos',
+        'share image', 'share images', 'share photo', 'share photos',
+        'give image', 'give images', 'give photo', 'give photos', 'give me image', 'give me photo',
+        'get image', 'get images', 'get photo', 'get photos', 'get me image', 'get me photo',
+        'have image', 'have images', 'have photo', 'have photos',
+        'image please', 'images please', 'photo please', 'photos please',
+        'any image', 'any images', 'any photo', 'any photos', 'any picture', 'any pictures', 'any pic', 'any pics',
+        'can i see them', 'can we see them', 'can i see it', 'can we see it',
     }
-    if clean in exact_matches:
+    if clean in exact_matches or clean_core in exact_matches:
         return True
 
     patterns = [
-        # can you show me images / could you please send photos / show product pictures / etc.
-        r'^(?:can|could|please|pls|kindly)?\s*(?:you\s+|i\s+|we\s+)?\s*(?:please\s+|pls\s+|kindly\s+)?(?:show|send|share|see|view|display|provide|give)\s+(?:me\s+|us\s+)?(?:the\s+|some\s+|any\s+|all\s+|product\s+|products\s+|these\s+|those\s+)*(?:images?|photos?|pictures?|pics?)(?:\s+(?:please|pls))?$',
-        # can I see them / can we view it / can I see the pictures
-        r'^(?:can|could)\s+(?:i|we)\s+(?:see|view|look\s+at)\s+(?:them|it|these|those|(?:the\s+)?(?:images?|photos?|pictures?|pics?))(?:\s+(?:please|pls))?$',
+        # (i need / i want / can i have / get me) [an] image/photo (for 3 / for this / as well)
+        r'^(?:i\s+)?(?:need|want|would\s+like)\s+(?:to\s+see\s+|to\s+have\s+|to\s+get\s+)?(?:an?\s+|the\s+|some\s+|any\s+)?(?:images?|photos?|pictures?|pics?)(?:\s+(?:for|of|on|about)\s+(?:[1-9]|1[0-9]|20|this|these|it|them|the\s+product|product|item))?$',
+        # can i have/get/see/view/show/send/share an image (for 3 / this/it/these/product)?
+        r'^(?:can|could|may|please|pls|kindly)?\s*(?:you\s+|i\s+|we\s+)?\s*(?:please\s+|pls\s+|kindly\s+)?(?:have|get|take|receive|obtain|see|view|look\s+at|show|send|share|display|provide|give)\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+|some\s+|any\s+|all\s+|product\s+|products\s+|these\s+|those\s+)*(?:images?|photos?|pictures?|pics?)(?:\s+(?:for|of|on|about)\s+(?:[1-9]|1[0-9]|20|this|these|it|them|the\s+product|product|item))?$',
+        # image for 3 / image for this / photo of this / product images
+        r'^(?:an?\s+|the\s+|some\s+|any\s+|product\s+)?(?:images?|photos?|pictures?|pics?)(?:\s+(?:for|of|on|about)?\s*(?:[1-9]|1[0-9]|20|this|these|it|them|the\s+product|product|item))?$',
+        # show me image / show photo / show image 3 / get image for 3
+        r'^(?:show|send|share|see|view|display|provide|give|get)\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+|some\s+|any\s+|all\s+|product\s+|products\s+|these\s+|those\s+)*(?:images?|photos?|pictures?|pics?)(?:\s+(?:for|of|on|about)?\s*(?:[1-9]|1[0-9]|20|this|these|it|them|the\s+product|product|item))?$',
         # what does it look like / how do they look
         r'^(?:what\s+does\s+it\s+look\s+like|what\s+do\s+they\s+look\s+like|how\s+does\s+it\s+look|how\s+do\s+they\s+look)$',
         # do you have any photos / are there any images
-        r'^(?:do\s+you\s+have|are\s+there\s+any)\s+(?:any\s+)?(?:images?|photos?|pictures?|pics?)(?:\s+(?:for\s+(?:this|these|them))?)?$',
-        # i want to see the photos
-        r'^(?:i\s+want\s+to\s+see|i\s+would\s+like\s+to\s+see|want\s+to\s+see|would\s+like\s+to\s+see)\s+(?:the\s+|some\s+)?(?:images?|photos?|pictures?|pics?|them|it)$',
+        r'^(?:do\s+you\s+have|are\s+there\s+any|is\s+there\s+any)\s+(?:an?\s+|any\s+)?(?:images?|photos?|pictures?|pics?)(?:\s+(?:for|of)\s+(?:this|these|it|them|the\s+product|product|item))?$',
+        # can i see them / can we see it
+        r'^(?:can|could|may)\s+(?:i|we|you)\s+(?:see|view|look\s+at|show)\s+(?:them|it|these|those)$',
     ]
     for pat in patterns:
-        if re.match(pat, clean):
+        if re.match(pat, clean) or re.match(pat, clean_core):
             return True
 
-    # Also match SKU-specific image requests: "image XG-MP-01", "photo of XG-MP-01", etc.
-    # These are detected by extract_sku_from_image_request; is_image_request_intent returns True
-    # so the caller routes to _handle_image_request in all cases.
+    # SKU patterns: "image XG-MP-01", "photo of XG-MP-01", etc.
     sku_patterns = [
-        r'^(?:image|images|photo|photos|pic|pics|picture|pictures)\s+[a-z0-9][a-z0-9\-]{1,20}$',
-        r'^(?:image|images|photo|photos|pic|pics|picture|pictures)\s+(?:of|for)\s+[a-z0-9][a-z0-9\-]{1,20}$',
-        r'^(?:show|send|share|give|provide|display)\s+(?:me\s+|us\s+)?(?:image|images|photo|photos|pic|pics|picture|pictures)\s+(?:(?:for|of|on|about)\s+)?[a-z0-9][a-z0-9\-]{1,20}$',
-        r'^(?:can|could)\s+(?:you\s+)?(?:please\s+)?(?:show|send|share|give|provide|display)\s+(?:me\s+|us\s+)?(?:the\s+|an?\s+)?(?:image|images|photo|photos|pic|pics|picture|pictures)\s+(?:(?:for|of|on|about)\s+)?[a-z0-9][a-z0-9\-]{1,20}$',
-        r'^(?:show|send|share|give)\s+(?:me\s+)?[a-z0-9][a-z0-9\-]{1,20}\s+(?:image|images|photo|photos|pic|pics|picture|pictures)$',
+        r'^(?:images?|photos?|pics?|pictures?)\s+[a-z0-9][a-z0-9\-]{1,20}$',
+        r'^(?:images?|photos?|pics?|pictures?)\s+(?:of|for)\s+[a-z0-9][a-z0-9\-]{1,20}$',
+        r'^(?:show|send|share|give|provide|display|have|get)\s+(?:me\s+|us\s+)?(?:images?|photos?|pics?|pictures?)\s+(?:(?:for|of|on|about)\s+)?[a-z0-9][a-z0-9\-]{1,20}$',
+        r'^(?:can|could)\s+(?:you\s+|i\s+)?(?:please\s+|pls\s+)?(?:show|send|share|give|provide|display|have|get)\s+(?:me\s+|us\s+)?(?:the\s+|an?\s+)?(?:images?|photos?|pics?|pictures?)\s+(?:(?:for|of|on|about)\s+)?[a-z0-9][a-z0-9\-]{1,20}$',
+        r'^(?:show|send|share|give)\s+(?:me\s+)?[a-z0-9][a-z0-9\-]{1,20}\s+(?:images?|photos?|pics?|pictures?)$',
     ]
     for pat in sku_patterns:
-        if re.match(pat, clean, re.IGNORECASE):
+        if re.match(pat, clean, re.IGNORECASE) or re.match(pat, clean_core, re.IGNORECASE):
             return True
 
     return False
+
+
+def normalize_multi_product_text(text: str) -> str:
+    """
+    Normalizes multi-product inquiry text, fixing common typos such as 'bootles' -> 'bottles'.
+    """
+    if not text:
+        return ""
+    clean = text.strip().lower()
+    for ch in ['*', '_', '~', '`', chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217)]:
+        clean = clean.replace(ch, '')
+    clean = re.sub(r'[?!.,;:]+$', '', clean).strip()
+
+    typos = {
+        r'\bbootles\b': 'bottles',
+        r'\bbootle\b': 'bottle',
+        r'\bbottls\b': 'bottles',
+        r'\bbotles\b': 'bottles',
+        r'\bbotle\b': 'bottle',
+        r'\bwatter\b': 'water',
+        r'\bpenz\b': 'pens',
+        r'\bpenns\b': 'pens',
+        r'\bmuggs\b': 'mugs',
+        r'\bmugg\b': 'mug',
+        r'\bnoteboks\b': 'notebooks',
+        r'\bnotebok\b': 'notebook',
+        r'\bgiftsets\b': 'gift sets',
+        r'\bgiftset\b': 'gift set',
+    }
+    for pat, repl in typos.items():
+        clean = re.sub(pat, repl, clean)
+
+    return clean
+
+
+def extract_multi_product_requirements(text: str) -> List[Dict[str, Any]]:
+    """
+    Extracts multiple distinct product/category requirements with quantities from messages like:
+      - "I need 5 bootles and 10 pens"
+      - "5 bottles and 10 pens"
+      - "I need 50 mugs, 100 pens and 20 bottles"
+    Returns a list of dicts: [{"raw_term": "bottles", "category": "Water Bottles", "quantity": 5}, ...]
+    Only returns a list if >= 2 distinct requirements are found.
+    """
+    if not text:
+        return []
+
+    clean = normalize_multi_product_text(text)
+    clean = re.sub(r'^(?:i\s+(?:need|want|would\s+like|am\s+looking\s+for)|give\s+me|send\s+me|looking\s+for|can\s+i\s+get|can\s+you\s+give\s+me)\s+', '', clean).strip()
+
+    segments = re.split(r'\s*(?:and|,|&|\+)\s*', clean)
+    requirements = []
+
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            continue
+
+        # Try: <qty> [units/pcs/nos of] <item>
+        m = re.match(r'^(\d+)\s*(?:pcs|pieces|units|nos|qty)?\s*(?:of\s+)?([a-z\s\-]+)$', seg)
+        if m:
+            qty = int(m.group(1))
+            term = m.group(2).strip()
+            matched_cat = catalogue_service.match_category_name(term)
+            if matched_cat or len(term) >= 3:
+                requirements.append({
+                    "raw_term": term,
+                    "category": matched_cat or term.title(),
+                    "quantity": qty,
+                })
+            continue
+
+        # Try: <item> [:] <qty>
+        m2 = re.match(r'^([a-z\s\-]+?)\s*[:=]?\s*(\d+)\s*(?:pcs|pieces|units|nos|qty)?$', seg)
+        if m2:
+            term = m2.group(1).strip()
+            qty = int(m2.group(2))
+            matched_cat = catalogue_service.match_category_name(term)
+            if matched_cat or len(term) >= 3:
+                requirements.append({
+                    "raw_term": term,
+                    "category": matched_cat or term.title(),
+                    "quantity": qty,
+                })
+            continue
+
+    if len(requirements) >= 2:
+        return requirements
+    return []
 
 
 def extract_sku_and_quantity_from_inquiry(text: str) -> Tuple[Optional[str], Optional[int]]:
@@ -217,7 +377,7 @@ def extract_sku_and_quantity_from_inquiry(text: str) -> Tuple[Optional[str], Opt
 
 def extract_sku_from_image_request(text: str) -> Optional[str]:
     """
-    Extracts a product SKU from an image/photo request that includes a SKU code.
+    Extracts a product SKU from an image/photo request that includes an explicit SKU code.
     Handles patterns such as:
       - "image XG-MP-01"
       - "photo of XG-MP-01"
@@ -226,17 +386,25 @@ def extract_sku_from_image_request(text: str) -> Optional[str]:
       - "can you show me image for XG-MP-01"
       - "send photo XG-MP-01"
     Returns the extracted SKU string (uppercased, normalized) or None.
-    Never matches pure image words without a SKU.
+    Never matches pronouns/stopwords (e.g. 'this', 'thuis', 'it', 'item') or pure image words.
     """
     if not text:
         return None
-    clean = re.sub(r'[*_~`"\'\u201c\u201d\u2018\u2019]', '', text).strip().lower()
+    clean = text.strip().lower()
+    for ch in ['*', '_', '~', '`', chr(34), chr(39), chr(8220), chr(8221), chr(8216), chr(8217)]:
+        clean = clean.replace(ch, '')
     clean = re.sub(r'[?!.,;:]+$', '', clean).strip()
 
-    # Pattern: image/photo/picture/pic [of/for] <SKU>
-    # Also: show [me] image/photo/picture [of/for] <SKU>
-    # Also: can you show me image for <SKU>
-    # SKU pattern: alphanumeric with hyphens, like XG-MP-01, XG-501, GS-002, MP-01
+    # Exclude common pronouns, determiners, and conversational stopwords from being identified as SKUs
+    NON_SKU_WORDS = {
+        "image", "images", "photo", "photos", "pic", "pics", "picture", "pictures",
+        "me", "us", "the", "for", "of", "this", "thuis", "that", "it", "these",
+        "those", "one", "ones", "item", "product", "products", "them", "all",
+        "now", "here", "there", "please", "plz", "pls", "plss", "more", "next",
+        "same", "above", "a", "an", "some", "any", "thiz", "dis", "on", "about",
+        "to", "at", "by", "from", "with"
+    }
+
     sku_pattern = r'([a-z0-9][a-z0-9\-]{1,20})'
     image_words = r'(?:image|images|photo|photos|pic|pics|picture|pictures)'
     prefix_words = r'(?:can\s+(?:you\s+)?(?:please\s+)?)?(?:show|send|share|give|provide|display)?(?:\s+me|\s+us)?'
@@ -259,13 +427,9 @@ def extract_sku_from_image_request(text: str) -> Optional[str]:
         m = re.match(pat, clean, re.IGNORECASE)
         if m:
             raw_sku = m.group(1).upper()
-            # Must look like a real SKU (not a pure image word)
-            if re.match(r'^[A-Z0-9][A-Z0-9\-]{1,20}$', raw_sku) and not raw_sku.lower() in {
-                'image', 'images', 'photo', 'photos', 'pic', 'pics', 'picture', 'pictures', 'me', 'us', 'the', 'for', 'of'
-            }:
+            if raw_sku.lower() not in NON_SKU_WORDS and re.match(r'^[A-Z0-9][A-Z0-9\-]{1,20}$', raw_sku):
                 return raw_sku
     return None
-
 
 class CatalogueService:
     def __init__(self, data_path: Optional[str] = None):
