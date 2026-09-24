@@ -63,18 +63,23 @@ def normalize_image_intent_text(text: str) -> str:
     clean = re.sub(r'[?!.,;:]+$', '', clean).strip()
 
     word_replacements = {
-        r'\bimaeg\b': 'image',
-        r'\bimaegs\b': 'images',
-        r'\bimag\b': 'image',
-        r'\bimags\b': 'images',
-        r'\bimg\b': 'image',
-        r'\bimgs\b': 'images',
-        r'\bphoot\b': 'photo',
-        r'\bphoots\b': 'photos',
-        r'\bpht\b': 'photo',
-        r'\bphts\b': 'photos',
-        r'\bpics?\b': 'photo',
-        r'\bpictures?\b': 'photo',
+        # Image misspellings / variants
+        r'\b(?:uimage|uimag|uimaeg|imaeg|imag|imge|imege|iamge|imgae|imaje|omage|yimage)\b': 'image',
+        r'\b(?:uimages|uimags|uimaegs|imaegs|imags|imges|imeges|iamges|imgaes|imajes|omages|yimages)\b': 'images',
+        r'\b(?:img|imagee)\b': 'image',
+        r'\b(?:imgs|imagees)\b': 'images',
+
+        # Photo misspellings / variants
+        r'\b(?:uphoto|phoot|pht|phto|phtoo|foto|phot|pohto|phoyo)\b': 'photo',
+        r'\b(?:uphotos|phoots|phts|phtos|phtoos|fotos|phots|pohtos|phoyos)\b': 'photos',
+
+        # Picture misspellings / variants
+        r'\b(?:upic|pik)\b': 'pic',
+        r'\b(?:upics|piks)\b': 'pics',
+        r'\b(?:upicture|pcture|piture|picutre|pictur|picter)\b': 'picture',
+        r'\b(?:upictures|pctures|pitures|picutres|picturs|picters)\b': 'pictures',
+
+        # Common colloquialisms & conversational typos
         r'\bthuis\b': 'this',
         r'\bthiz\b': 'this',
         r'\bdis\b': 'this',
@@ -83,6 +88,7 @@ def normalize_image_intent_text(text: str) -> str:
         r'\bcna\b': 'can',
         r'\bgt\b': 'get',
         r'\bu\b': 'you',
+        r'\bur\b': 'your',
         r'\bplz\b': 'please',
         r'\bpls\b': 'please',
         r'\bplss\b': 'please',

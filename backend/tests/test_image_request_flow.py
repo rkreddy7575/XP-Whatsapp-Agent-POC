@@ -483,6 +483,70 @@ class TestImageRequestFlow(unittest.TestCase):
         self.assertNotIn("No products found", reply)
 
 
+    @patch("services.gemini_service.gemini_service.parse_intent")
+    @patch("main.send_image_message", new_callable=AsyncMock)
+    @patch("main.send_text_message", new_callable=AsyncMock)
+    def test_11_uimage_and_extended_typo_variations(self, mock_send_text, mock_send_image, mock_gemini):
+        """
+        Tests extended typo handling for image requests, specifically verifying:
+        'show me uimage', 'show me uimage for this', 'can i have uimage', 'show uimage',
+        'send uimage', 'uimage please', 'show me imag', 'show me imaeg', 'show me imge',
+        'show me foto', 'show me pht', 'show me piture', 'show me picutre'.
+        Also verifies candidate numbered request 'uimage for 3'.
+        """
+        phone = "919876543266"
+        conv = conversation_service.get_or_create_conversation(phone)
+        conversation_service.set_selected_product(conv.conversation_id, "XG-BT-001", None)
+
+        typo_variations = [
+            "show me uimage",
+            "show me uimage for this",
+            "can i have uimage",
+            "show uimage",
+            "send uimage",
+            "uimage please",
+            "show me imag",
+            "show me imaeg",
+            "show me imge",
+            "show me foto",
+            "show me pht",
+            "show me piture",
+            "show me picutre",
+        ]
+
+        for q in typo_variations:
+            mock_send_image.reset_mock()
+            mock_send_text.reset_mock()
+            mock_gemini.reset_mock()
+
+            resp = self.client.post("/webhook", json=make_webhook_payload(q, phone))
+            self.assertEqual(resp.status_code, 200)
+
+            mock_gemini.assert_not_called()
+            mock_send_image.assert_called_once()
+            mock_send_text.assert_called_once()
+            reply = mock_send_text.call_args.kwargs.get("message")
+            self.assertIn("Image for XG-BT-001 is on its way", reply, f"Failed on typo variant: {q}")
+            self.assertNotIn("No products found", reply, f"Fell through to search for: {q}")
+
+        # Numbered candidate variation with uimage
+        candidates = [
+            {"sku": "XG-BT-001", "name": "Bottle 1", "category": "Water Bottles"},
+            {"sku": "XG-MP-01", "name": "Pen 1", "category": "Writing Instruments"},
+            {"sku": "XG-BT-003", "name": "Bottle 3", "category": "Water Bottles"},
+        ]
+        conversation_service.set_candidates(conv.conversation_id, candidates)
+        mock_send_image.reset_mock()
+        mock_send_text.reset_mock()
+        mock_gemini.reset_mock()
+        resp = self.client.post("/webhook", json=make_webhook_payload("uimage for 3", phone))
+        self.assertEqual(resp.status_code, 200)
+        mock_gemini.assert_not_called()
+        mock_send_text.assert_called_once()
+        reply_cand = mock_send_text.call_args.kwargs.get("message")
+        self.assertIn("XG-BT-003", reply_cand)
+        self.assertNotIn("No products found", reply_cand)
+
 if __name__ == "__main__":
 
     unittest.main()
