@@ -2,7 +2,7 @@ import sys
 import json
 import os
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -121,6 +121,98 @@ def is_image_request_intent(text: str) -> bool:
             return True
 
     return False
+
+
+def extract_sku_and_quantity_from_inquiry(text: str) -> Tuple[Optional[str], Optional[int]]:
+    """
+    Extracts a product SKU and optional quantity from natural-language price/quote inquiries or product mentions.
+    Supported patterns include:
+      - "what is the price for GS-135"
+      - "what is the price of GS-135"
+      - "price of GS-135"
+      - "how much is GS-135"
+      - "GS-135 price"
+      - "give me price for GS-135"
+      - "what about GS-135"
+      - "what is th e price for XG-GS-137"
+      - "what is the price for GS-135 for 100 units"
+      - "how much for XG-501 500 pcs"
+    Returns (canonical_sku, quantity) where quantity may be None.
+    Returns (None, None) if no SKU is found.
+    """
+    if not text:
+        return None, None
+
+    clean = text.strip()
+    norm_text = re.sub(r'\bth\s+e\b', 'the', clean, flags=re.IGNORECASE)
+
+    sku_candidate = None
+
+    # 1. Pen pattern: XG-MP-01 / XG MP 01 / MP-01
+    pen_match = re.search(r'\b(XG\s*-\s*MP[\s-]*\d+|MP[\s-]*\d+)\b', norm_text, re.IGNORECASE)
+    if pen_match:
+        sku_candidate = re.sub(r'\s+', '-', pen_match.group(1)).strip().upper()
+    else:
+        # 2. GS pattern: XG-GS-137 / GS-135 / GS 135
+        gs_match = re.search(r'\b(XG\s*-\s*GS[\s-]*\d+|GS[\s-]*\d+)\b', norm_text, re.IGNORECASE)
+        if gs_match:
+            sku_candidate = re.sub(r'\s+', '-', gs_match.group(1)).strip().upper()
+        else:
+            # 3. General XG pattern: XG-501 / XG 501 / XG-577
+            xg_match = re.search(r'\b(XG[\s-]*\d{3,4})\b', norm_text, re.IGNORECASE)
+            if xg_match:
+                sku_candidate = re.sub(r'\s+', '-', xg_match.group(1)).strip().upper()
+            else:
+                # 4. Token scan against catalogue_service or pricing_service
+                tokens = re.findall(r'[a-zA-Z0-9\-]+', norm_text)
+                for t in tokens:
+                    if not t.isdigit():
+                        upper_t = t.upper()
+                        prod = catalogue_service.get_by_sku(upper_t)
+                        if prod:
+                            sku_candidate = prod.get("sku") or upper_t
+                            break
+                        try:
+                            from services.pricing_service import pricing_service
+                            rule = pricing_service.get_any_rule_for_sku(upper_t)
+                            if rule:
+                                sku_candidate = rule.sku
+                                break
+                        except Exception:
+                            pass
+
+    if not sku_candidate:
+        return None, None
+
+    # Resolve canonical SKU
+    prod = catalogue_service.get_by_sku(sku_candidate)
+    if prod and prod.get("sku"):
+        canonical_sku = prod["sku"]
+    else:
+        try:
+            from services.pricing_service import pricing_service
+            rule = pricing_service.get_any_rule_for_sku(sku_candidate)
+            if rule:
+                canonical_sku = rule.sku
+            else:
+                canonical_sku = sku_candidate
+        except Exception:
+            canonical_sku = sku_candidate
+
+    # Find quantity in remaining text
+    pattern_to_remove = re.escape(sku_candidate)
+    rem_text = re.sub(pattern_to_remove, ' ', norm_text, flags=re.IGNORECASE)
+
+    qty = None
+    num_matches = re.findall(r'\b(\d+)\b', rem_text)
+    if num_matches:
+        for n in num_matches:
+            v = int(n)
+            if 1 <= v <= 100000:
+                qty = v
+                break
+
+    return canonical_sku, qty
 
 
 def extract_sku_from_image_request(text: str) -> Optional[str]:

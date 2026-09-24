@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
-from services.catalogue_service import catalogue_service, extract_sku_from_image_request, is_category_browsing_intent, is_image_request_intent
+from services.catalogue_service import catalogue_service, extract_sku_and_quantity_from_inquiry, extract_sku_from_image_request, is_category_browsing_intent, is_image_request_intent
 from services.conversation_models import MessageDirection
 from services.conversation_service import conversation_service
 from services.gemini_models import IntentType, StructuredIntent
@@ -272,6 +272,44 @@ class AgentRouter:
         # Fast-Path E_CHANGE: Change Product / View Alternatives ("another one", "change product", "go back")
         if is_change_product_intent(clean_text):
             return self._handle_change_product(conv, customer_phone)
+
+        # Fast-Path SKU_INQUIRY: Natural Language SKU Price / Product Inquiry
+        # (e.g. "what is the price for GS-135", "price of GS-135", "how much is GS-135",
+        #  "GS-135 price", "give me price for GS-135", "what about GS-135", "what is th e price for XG-GS-137")
+        _inq_sku, _inq_qty = extract_sku_and_quantity_from_inquiry(clean_text)
+        if _inq_sku:
+            if _inq_qty is not None and _inq_qty > 0:
+                reply = self._handle_direct_quote(conv_id, customer_phone, _inq_sku, _inq_qty)
+                self._finalize_reply(conv_id, IntentType.PRICE_QUOTE.value, reply)
+                return reply
+            elif re.sub(r'[^A-Z0-9]', '', clean_text.upper()) != re.sub(r'[^A-Z0-9]', '', _inq_sku.upper()):
+                # Conversational inquiry containing SKU (not a pure exact SKU token)
+                # Switch context to the newly requested SKU
+                conversation_service.set_selected_product(conv_id, _inq_sku, None)
+                conversation_service.clear_pending_quote(conv_id)
+                conversation_service.set_candidates(conv_id, [])
+                order_service.clear_pending_quote(customer_phone)
+
+                prod = catalogue_service.get_by_sku(_inq_sku)
+                if prod:
+                    cat = prod.get("category", "")
+                    subcat = prod.get("subcategory", "")
+                    name = prod.get("name") or (f"{cat} – {subcat}" if subcat and subcat != cat else cat)
+                    colors = prod.get("colors")
+                    color_str = f"\n🎨 *Options:* {', '.join(colors)}" if colors else ""
+                    reply = (
+                        f"📦 *Product:* {name}\n"
+                        f"🏷️ *SKU:* `{_inq_sku}`\n"
+                        f"📂 *Category:* {cat}{color_str}\n\n"
+                        f"🔢 *How many units of {_inq_sku} do you need?* (Please tell me the quantity, e.g. *100* or *250 units*)"
+                    )
+                else:
+                    reply = (
+                        f"🏷️ *Product Code:* `{_inq_sku}`\n\n"
+                        f"🔢 *How many units of {_inq_sku} do you need?* (Please tell me the quantity, e.g. *100* or *250 units*)"
+                    )
+                self._finalize_reply(conv_id, IntentType.PRODUCT_DETAILS.value, reply)
+                return reply
 
         # Fast-Path E: Active Product Candidate Selection (by index e.g. "1", "2", "second one" or by candidate SKU e.g. "GS-002")
         if conv.current_product_candidates:
