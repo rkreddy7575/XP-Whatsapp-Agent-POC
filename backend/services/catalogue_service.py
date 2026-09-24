@@ -105,7 +105,74 @@ def is_image_request_intent(text: str) -> bool:
     for pat in patterns:
         if re.match(pat, clean):
             return True
+
+    # Also match SKU-specific image requests: "image XG-MP-01", "photo of XG-MP-01", etc.
+    # These are detected by extract_sku_from_image_request; is_image_request_intent returns True
+    # so the caller routes to _handle_image_request in all cases.
+    sku_patterns = [
+        r'^(?:image|images|photo|photos|pic|pics|picture|pictures)\s+[a-z0-9][a-z0-9\-]{1,20}$',
+        r'^(?:image|images|photo|photos|pic|pics|picture|pictures)\s+(?:of|for)\s+[a-z0-9][a-z0-9\-]{1,20}$',
+        r'^(?:show|send|share|give|provide|display)\s+(?:me\s+|us\s+)?(?:image|images|photo|photos|pic|pics|picture|pictures)\s+(?:(?:for|of|on|about)\s+)?[a-z0-9][a-z0-9\-]{1,20}$',
+        r'^(?:can|could)\s+(?:you\s+)?(?:please\s+)?(?:show|send|share|give|provide|display)\s+(?:me\s+|us\s+)?(?:the\s+|an?\s+)?(?:image|images|photo|photos|pic|pics|picture|pictures)\s+(?:(?:for|of|on|about)\s+)?[a-z0-9][a-z0-9\-]{1,20}$',
+        r'^(?:show|send|share|give)\s+(?:me\s+)?[a-z0-9][a-z0-9\-]{1,20}\s+(?:image|images|photo|photos|pic|pics|picture|pictures)$',
+    ]
+    for pat in sku_patterns:
+        if re.match(pat, clean, re.IGNORECASE):
+            return True
+
     return False
+
+
+def extract_sku_from_image_request(text: str) -> Optional[str]:
+    """
+    Extracts a product SKU from an image/photo request that includes a SKU code.
+    Handles patterns such as:
+      - "image XG-MP-01"
+      - "photo of XG-MP-01"
+      - "picture of XG-MP-01"
+      - "show me image for XG-MP-01"
+      - "can you show me image for XG-MP-01"
+      - "send photo XG-MP-01"
+    Returns the extracted SKU string (uppercased, normalized) or None.
+    Never matches pure image words without a SKU.
+    """
+    if not text:
+        return None
+    clean = re.sub(r'[*_~`"\'\u201c\u201d\u2018\u2019]', '', text).strip().lower()
+    clean = re.sub(r'[?!.,;:]+$', '', clean).strip()
+
+    # Pattern: image/photo/picture/pic [of/for] <SKU>
+    # Also: show [me] image/photo/picture [of/for] <SKU>
+    # Also: can you show me image for <SKU>
+    # SKU pattern: alphanumeric with hyphens, like XG-MP-01, XG-501, GS-002, MP-01
+    sku_pattern = r'([a-z0-9][a-z0-9\-]{1,20})'
+    image_words = r'(?:image|images|photo|photos|pic|pics|picture|pictures)'
+    prefix_words = r'(?:can\s+(?:you\s+)?(?:please\s+)?)?(?:show|send|share|give|provide|display)?(?:\s+me|\s+us)?'
+    connector = r'(?:\s+(?:for|of|on|about))?\s+'
+
+    patterns = [
+        # "image XG-MP-01" / "photo XG-MP-01" / "picture XG-MP-01"
+        rf'^{image_words}\s+{sku_pattern}$',
+        # "image of XG-MP-01" / "photo of XG-MP-01" / "picture for XG-MP-01"
+        rf'^{image_words}\s+(?:of|for)\s+{sku_pattern}$',
+        # "show image for XG-MP-01" / "send photo of XG-MP-01" / "show me picture of XG-MP-01"
+        rf'^(?:show|send|share|give|provide|display)\s+(?:me\s+|us\s+)?{image_words}{connector}{sku_pattern}$',
+        # "can you show me image for XG-MP-01"
+        rf'^(?:can|could)\s+(?:you\s+)?(?:please\s+)?(?:show|send|share|give|provide|display)\s+(?:me\s+|us\s+)?(?:the\s+|an?\s+)?{image_words}{connector}{sku_pattern}$',
+        # "show XG-MP-01 image" / "show XG-MP-01 photo"
+        rf'^(?:show|send|share|give)\s+(?:me\s+)?{sku_pattern}\s+{image_words}$',
+    ]
+
+    for pat in patterns:
+        m = re.match(pat, clean, re.IGNORECASE)
+        if m:
+            raw_sku = m.group(1).upper()
+            # Must look like a real SKU (not a pure image word)
+            if re.match(r'^[A-Z0-9][A-Z0-9\-]{1,20}$', raw_sku) and not raw_sku.lower() in {
+                'image', 'images', 'photo', 'photos', 'pic', 'pics', 'picture', 'pictures', 'me', 'us', 'the', 'for', 'of'
+            }:
+                return raw_sku
+    return None
 
 
 class CatalogueService:

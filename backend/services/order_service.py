@@ -260,6 +260,8 @@ class OrderService:
         exact_matches = {
             "CONFIRM",
             "YES",
+            "OK",
+            "OKAY",
             "CONFIRMED",
             "PLACE ORDER",
             "PLACE MY ORDER",

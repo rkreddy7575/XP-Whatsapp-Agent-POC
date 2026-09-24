@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
-from services.catalogue_service import catalogue_service, is_category_browsing_intent, is_image_request_intent
+from services.catalogue_service import catalogue_service, extract_sku_from_image_request, is_category_browsing_intent, is_image_request_intent
 from services.conversation_models import MessageDirection
 from services.conversation_service import conversation_service
 from services.gemini_models import IntentType, StructuredIntent
@@ -243,9 +243,22 @@ class AgentRouter:
             self._finalize_reply(conv_id, IntentType.PRODUCT_SEARCH.value, reply)
             return reply
 
+        # Fast-Path E_QUOTE_QTY: Active Quote Quantity Change (priority before image/search)
+        # When pending quote exists, natural quantity expressions resolve BEFORE all other intents
+        if conv.pending_quote:
+            _early_qty = self._extract_standalone_quantity(clean_text)
+            if _early_qty is not None:
+                _active_sku = conv.pending_quote.get("sku") or conv.selected_sku
+                if _active_sku:
+                    reply = self._handle_direct_quote(conv_id, customer_phone, _active_sku, _early_qty)
+                    self._finalize_reply(conv_id, IntentType.PRICE_QUOTE.value, reply)
+                    return reply
+
         # Fast-Path E0: Image / Photo Request ("can you show me image", "show me images", "photos", etc.)
-        if is_image_request_intent(clean_text):
-            return self._handle_image_request(conv, customer_phone)
+        # Also handles SKU-specific: "image XG-MP-01", "photo of XG-MP-01", "picture of XG-MP-01", etc.
+        _image_sku = extract_sku_from_image_request(clean_text)
+        if _image_sku or is_image_request_intent(clean_text):
+            return self._handle_image_request(conv, customer_phone, clean_text, _image_sku)
 
         # Fast-Path E_MORE: Pagination Continuation ("show more", "next", "more", "other options", etc.)
         # If pending quote exists and text is "next", prioritize pending quote guidance
@@ -618,23 +631,98 @@ class AgentRouter:
         self,
         conv,
         customer_phone: str,
+        message_text: str = "",
+        image_sku: Optional[str] = None,
     ) -> str:
         """
-        Handles requests to view images/photos of current product candidates.
-        Dispatches media messages with real Supabase image URLs and preserves candidate state.
-        If no candidates exist, returns helpful guidance rather than performing a keyword search.
+        Handles requests to view product images/photos.
+        Supports three modes:
+          1. SKU-specific: "image XG-MP-01", "photo of XG-MP-01" -- sends image for that SKU.
+          2. Selected product context: conv.selected_sku when no candidates listed.
+          3. Multiple candidates: "show me image" when product list is displayed.
+        Never invents image URLs. Reports clearly when no image is available.
         """
         conv_id = conv.conversation_id
+
+        # --- Mode 1: Explicit SKU in request ("image XG-MP-01", "photo of XG-MP-01") ---
+        if image_sku:
+            product = catalogue_service.get_by_sku(image_sku)
+            canonical_sku = product.get("sku", image_sku) if product else image_sku
+            image_url = catalogue_service.get_image_url(canonical_sku)
+            if image_url:
+                prod_name = ""
+                if product:
+                    cat = product.get("category", "")
+                    subcat = product.get("subcategory", "")
+                    prod_name = product.get("name") or (
+                        f"{cat} — {subcat}" if subcat and subcat != cat else cat
+                    )
+                clean_phone = customer_phone.lstrip("+").strip()
+                caption = (f"📦 *{prod_name}* ({canonical_sku})" if prod_name
+                           else f"📦 {canonical_sku}")
+                self._pending_media_messages[clean_phone] = [{
+                    "sku": canonical_sku,
+                    "image_url": image_url,
+                    "caption": caption,
+                }]
+                reply = (
+                    f"✅ Image for {canonical_sku} is on its way!\n\n"
+                    f"▪️ Reply with *{canonical_sku} 100* (or any quantity) to get an instant quote."
+                )
+            else:
+                reply = (
+                    f"❌ Sorry, I don’t have an image for {canonical_sku} yet.\n\n"
+                    f"▪️ Reply with *{canonical_sku} 100* (or any quantity) to get an instant quote instead."
+                )
+            self._finalize_reply(conv_id, "SHOW_IMAGES", reply)
+            return reply
+
         candidates = conv.current_product_candidates
 
+        # --- Mode 2: Selected product context (no candidates, but product is selected) ---
+        if not candidates and conv.selected_sku:
+            sku = conv.selected_sku
+            image_url = catalogue_service.get_image_url(sku)
+            if image_url:
+                product = catalogue_service.get_by_sku(sku)
+                prod_name = ""
+                if product:
+                    cat = product.get("category", "")
+                    subcat = product.get("subcategory", "")
+                    prod_name = product.get("name") or (
+                        f"{cat} — {subcat}" if subcat and subcat != cat else cat
+                    )
+                clean_phone = customer_phone.lstrip("+").strip()
+                caption = (f"📦 *{prod_name}* ({sku})" if prod_name
+                           else f"📦 {sku}")
+                self._pending_media_messages[clean_phone] = [{
+                    "sku": sku,
+                    "image_url": image_url,
+                    "caption": caption,
+                }]
+                reply = (
+                    f"✅ Image for {sku} is on its way!\n\n"
+                    f"▪️ Reply with a quantity (e.g. *100*) to get an instant quote."
+                )
+            else:
+                reply = (
+                    f"❌ Sorry, I don’t have an image for {sku} yet.\n\n"
+                    f"▪️ Reply with a quantity (e.g. *100*) to get an instant quote instead."
+                )
+            self._finalize_reply(conv_id, "SHOW_IMAGES", reply)
+            return reply
+
+        # --- No context at all: ask which product ---
         if not candidates:
             reply = (
-                "Sure — tell me the product or category you'd like to see images for (e.g. *Mugs*, *Gift Sets*, or *XG-501*).\n\n"
-                "• Reply with *Categories* to browse all collections."
+                "Sure — tell me the product or category you'd like to see images for "
+                "(e.g. *Mugs*, *Gift Sets*, or *XG-501*).\n\n"
+                "▪️ Reply with *Categories* to browse all collections."
             )
             self._finalize_reply(conv_id, IntentType.GENERAL_HELP.value, reply)
             return reply
 
+        # --- Mode 3: Active candidates -- attempt to send images for all ---
         clean_phone = customer_phone.lstrip("+").strip()
         target_qty = conv.selected_quantity or 100
         media_list = self._build_candidate_media_messages(candidates, target_qty=target_qty)
@@ -647,38 +735,34 @@ class AgentRouter:
         ]
 
         if len(media_list) == len(candidates):
-            # All candidates have images
             if len(candidates) == 1:
-                reply = "👉 Reply with 1 to select this product."
+                reply = "▪️ Which product would you like to see? Reply with 1 to select this product."
             elif len(candidates) == 2:
-                reply = "👉 Reply with 1 or 2 to select a product."
+                reply = "▪️ Which product would you like to see? Reply with 1 or 2 to select a product."
             else:
-                nums_str = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
-                reply = f"👉 Reply with {nums_str} to select a product."
+                _nums = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
+                reply = f"▪️ Which product would you like to see? Reply with {_nums} to select a product."
         elif media_list:
-            # Some candidates have images, some do not
             missing_lines = []
             for idx, c in missing_images:
                 sku = c.get("sku", "")
                 name = c.get("name") or c.get("category", "Product")
-                missing_lines.append(f"{idx}️⃣ *{name}* (SKU: `{sku}`) — _Photo not available_")
+                missing_lines.append(f"{idx}️⃣ *{name}* (SKU: {sku}) — _Photo not available_")
             nums_str = ", ".join(str(i) for i in range(1, len(candidates))) + f", or {len(candidates)}"
             reply = (
-                f"📷 Photos sent for the products above.\n\n"
-                f"{'\n'.join(missing_lines)}\n\n"
-                f"👉 Reply with {nums_str} to select a product."
+                "📷 Photos sent for the products above.\n\n"
+                + "\n".join(missing_lines) + "\n\n"
+                + f"▪️ Which product would you like to see? Reply with {nums_str} or SKU."
             )
         else:
-            # None of the candidates have photos available
             sku_list = ", ".join(f"`{c.get('sku', '')}`" for c in candidates)
             reply = (
                 f"📷 Photos are not currently on file for these items ({sku_list}).\n\n"
-                "You can still select any item to receive a full quotation or specification."
+                "Which product would you like to see? Reply with the number or SKU."
             )
 
         self._finalize_reply(conv_id, "SHOW_IMAGES", reply)
         return reply
-
     @staticmethod
     def _extract_selection_index(text: str) -> Optional[int]:
         """Extracts 1-based selection index from numeric or ordinal text (supports 1..20)."""
@@ -786,8 +870,18 @@ class AgentRouter:
                 except Exception:
                     pending = None
 
-        if pending:
+        # Deterministic Final Confirmation Gate:
+        # 1. Active quote must exist
+        # 2. Quote must be available (priced)
+        # 3. Quantity must be valid (> 0)
+        # 4. SKU must be present
+        if pending and getattr(pending, "available", False) and getattr(pending, "quantity", 0) and pending.quantity > 0 and getattr(pending, "sku", None):
             order = order_service.confirm_pending_order(customer_phone, customer_name=customer_name)
+            if not order:
+                return (
+                    "⚠️ You don't have an active quotation pending confirmation.\n\n"
+                    "Please send a product code and quantity (e.g., *GS-002 100*) to get an instant quote first!"
+                )
             conversation_service.clear_pending_quote(conv_id)
             conversation_service.clear_selection(conv_id)
             try:
@@ -1090,16 +1184,34 @@ class AgentRouter:
         Handles punctuation typos (e.g. '.50', '50.', ',50', '#50'),
         plain numbers ('50', '100', '250'),
         unit suffixes ('50 units', '100 pcs', '50 pieces', 'qty 50', 'need 100'),
+        natural language typos ('50 unitys', '50 unita', '50 uni', '50 qty'),
         and natural questions ('what about 50?', 'how much for 200?', 'price for 200 instead?').
         """
         if not text:
             return None
         clean = text.strip()
 
+        # Unit-word pattern includes common typos: unitys, unitas, uniti, qty variations
+        _UNIT_WORDS = r"(?:units?|unitys?|unitas?|uniti|qty|quantity|pcs?|pieces?|nos?|items?|sets?)"
+
         patterns = [
-            r"^(?:what\s+about|how\s+about|what\s+if|how\s+much\s+for|price\s+for|quote\s+for|can\s+you\s+give\s+(?:me\s+)?(?:the\s+)?price\s+for|make\s+it|change\s+to|for)\s+(\d+)\s*(?:units?|pcs?|pieces?|nos?|items?)?(?:\s+instead|\s+please)?\s*[?.]*$",
-            r"^\s*[.,#\s]*(?:qty|quantity|need|for|just|around|about)?\s*[:\-]?\s*(\d+)\s*(?:units?|pcs?|pieces?|nos?|items?)?(?:\s+instead|\s+please)?\s*[.,?!]*$",
+            # "what about 50" / "make it 200" / "how much for 100" / "change to 250"
+            rf"^(?:what\s+about|how\s+about|what\s+if|how\s+much\s+for|price\s+for|quote\s+for|"
+            rf"can\s+you\s+give\s+(?:me\s+)?(?:the\s+)?price\s+for|make\s+it|change\s+to|for)"
+            rf"\s+(\d+)\s*{_UNIT_WORDS}?(?:\s+instead|\s+please)?\s*[?.]*$",
+
+            # "i need 50" / "i need 50 unitys" / "i want 50" / "give me 50" / "just 50"
+            rf"^(?:i\s+(?:need|want|would\s+like|ll\s+take|take)|give\s+me|just|only|send\s+me)"
+            rf"\s+(\d+)\s*{_UNIT_WORDS}?(?:\s+instead|\s+please)?\s*[.,?!]*$",
+
+            # "50" / "50 units" / "50 unitys" / "qty 50" / "need 50" / "100 pcs" / "around 200"
+            rf"^\s*[.,#\s]*(?:qty|quantity|need|for|just|around|about)?\s*[:\-]?\s*(\d+)"
+            rf"\s*{_UNIT_WORDS}?(?:\s+instead|\s+please)?\s*[.,?!]*$",
+
+            # "qty is 50" / "quantity: 100"
             r"\b(?:qty|quantity)\s*(?:is|=|:)?\s*(\d+)\b",
+
+            # "50 instead"
             r"^(\d+)\s+instead\s*[?.]*$",
         ]
         for p in patterns:
