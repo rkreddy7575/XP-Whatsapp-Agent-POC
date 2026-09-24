@@ -31,6 +31,8 @@ from services.whatsapp_service import (
     send_text_message,
     send_image_message,
 )
+from services.audit_service import audit_service
+from services.whatsapp_health_service import whatsapp_health_service
 from services.catalogue_service import catalogue_service
 from services.pricing_service import pricing_service
 from services.inventory_service import inventory_service
@@ -112,6 +114,36 @@ async def health_check() -> Dict[str, str]:
     Simple health check endpoint for uptime monitoring and readiness verification.
     """
     return {"status": "ok"}
+
+
+@app.get("/health/whatsapp", status_code=status.HTTP_200_OK)
+async def whatsapp_health_check(request: Request) -> Dict[str, Any]:
+    """
+    Safe WhatsApp-specific diagnostic endpoint.
+    Public requests receive high-level status flags (healthy, webhook, credentials, meta_api).
+    Authenticated requests (with dashboard Bearer token or X-API-Key) receive full safe operational diagnostics.
+    Never exposes access tokens or secrets.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    api_key_header = request.headers.get("X-API-Key", "")
+    is_authenticated = False
+
+    expected_token = os.getenv("DASHBOARD_API_KEY", "").strip()
+    if is_testing_environment() and not expected_token:
+        expected_token = "test-dashboard-secret-token-key-12345"
+
+    if expected_token:
+        token = None
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+        elif api_key_header:
+            token = api_key_header.strip()
+        if token and secrets.compare_digest(token, expected_token):
+            is_authenticated = True
+
+    if is_authenticated:
+        return await whatsapp_health_service.get_dashboard_diagnostic()
+    return await whatsapp_health_service.get_public_summary()
 
 
 # ============================================================================
@@ -250,6 +282,15 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                     sender = message.get("from")
                     message_type = message.get("type")
                     message_id = message.get("id")
+                    correlation_id = f"corr_{message_id or secrets.token_hex(6)}"
+
+                    audit_service.record_event(
+                        correlation_id=correlation_id,
+                        phone=sender or "",
+                        wamid=message_id,
+                        event_type="RECEIVED",
+                        details={"type": message_type, "message_id": message_id},
+                    )
 
                     # Webhook idempotency guard: prevent duplicate processing on Meta retries
                     if message_id and conversation_service.is_message_processed(message_id):
@@ -258,10 +299,24 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                             message_id,
                             sender,
                         )
+                        audit_service.record_event(
+                            correlation_id=correlation_id,
+                            phone=sender or "",
+                            wamid=message_id,
+                            event_type="DUPLICATE_IGNORED",
+                            details={"reason": "wamid_already_processed"},
+                        )
                         continue
 
                     if message_id:
                         conversation_service.mark_message_processing(message_id)
+                        audit_service.record_event(
+                            correlation_id=correlation_id,
+                            phone=sender or "",
+                            wamid=message_id,
+                            event_type="PERSISTED",
+                            details={"message_id": message_id},
+                        )
 
                     if message_type == "text":
                         text_body = message.get("text", {}).get("body", "")
@@ -279,6 +334,14 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                             if contacts:
                                 cust_name = contacts[0].get("profile", {}).get("name")
 
+                            audit_service.record_event(
+                                correlation_id=correlation_id,
+                                phone=sender,
+                                wamid=message_id,
+                                event_type="ROUTING_STARTED",
+                                details={"body_preview": text_body[:80]},
+                            )
+
                             reply_text = agent_router.handle_incoming_message(
                                 customer_phone=sender,
                                 message_text=text_body,
@@ -291,22 +354,52 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                                 len(reply_text),
                             )
 
+                            audit_service.record_event(
+                                correlation_id=correlation_id,
+                                phone=sender,
+                                wamid=message_id,
+                                event_type="ROUTING_COMPLETED",
+                                details={"reply_length": len(reply_text)},
+                            )
+
                             # Dispatch text reply FIRST so customer sees complete ordered list immediately
                             logger.info("Attempting outbound text reply to [%s]", sender)
                             try:
-                                await send_text_message(to=sender, message=reply_text)
-                                logger.info("Outbound reply sent successfully to [%s]", sender)
+                                send_res = await send_text_message(
+                                    to=sender,
+                                    message=reply_text,
+                                    correlation_id=correlation_id,
+                                )
+                                outbound_wamid = send_res.get("message_id") if isinstance(send_res, dict) else None
+                                if outbound_wamid:
+                                    conv = conversation_service.get_or_create_conversation(sender)
+                                    conversation_service.update_latest_outbound_wamid(conv.conversation_id, outbound_wamid)
+                                logger.info("Outbound reply sent successfully to [%s] (WAMID: %s)", sender, outbound_wamid)
                             except (WhatsAppAPIError, WhatsAppConfigError) as api_err:
                                 logger.error(
                                     "Failed to send outbound reply to [%s]: %s",
                                     sender,
                                     api_err,
                                 )
+                                audit_service.record_event(
+                                    correlation_id=correlation_id,
+                                    phone=sender,
+                                    wamid=message_id,
+                                    event_type="FAILED",
+                                    details={"error": str(api_err)},
+                                )
                             except Exception as reply_exc:
                                 logger.error(
                                     "Unexpected error sending outbound reply to [%s]: %s",
                                     sender,
                                     reply_exc,
+                                )
+                                audit_service.record_event(
+                                    correlation_id=correlation_id,
+                                    phone=sender,
+                                    wamid=message_id,
+                                    event_type="FAILED",
+                                    details={"error": str(reply_exc)},
                                 )
 
                             # Dispatch any candidate product image cards sequentially in candidate order
@@ -327,6 +420,7 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                                         to=sender,
                                         image_url=img_msg["image_url"],
                                         caption=img_msg.get("caption"),
+                                        correlation_id=correlation_id,
                                     )
                                     if i < len(pending_images) - 1 and pacing_delay > 0:
                                         await asyncio.sleep(pacing_delay)
@@ -340,16 +434,30 @@ async def receive_webhook(request: Request) -> Dict[str, str]:
                             message_id,
                         )
 
-                # Check for message status updates (sent, delivered, read)
+                # Check for message status updates (sent, delivered, read, failed)
                 statuses = value.get("statuses", [])
                 for status_update in statuses:
+                    status_wamid = status_update.get("id")
                     recipient_id = status_update.get("recipient_id")
                     msg_status = status_update.get("status")
-                    logger.debug(
-                        "WhatsApp delivery status update for [%s]: %s",
+                    errors = status_update.get("errors")
+                    raw_timestamp = status_update.get("timestamp")
+                    logger.info(
+                        "WhatsApp delivery status update for [%s] (WAMID: %s): %s",
                         recipient_id,
+                        status_wamid,
                         msg_status,
                     )
+                    if status_wamid and msg_status:
+                        conversation_service.update_message_status(status_wamid, msg_status.upper())
+                    if status_wamid:
+                        audit_service.record_status_event(
+                            wamid=status_wamid,
+                            recipient_id=recipient_id or "",
+                            status=msg_status or "",
+                            errors=errors,
+                            raw_timestamp=raw_timestamp,
+                        )
 
     except Exception as exc:
         # Prevent any unexpected schema changes from crashing the webhook handler
@@ -601,6 +709,27 @@ async def get_enquiries(limit: int = 50) -> List[Dict[str, Any]]:
     return conversation_service.list_active_enquiries(limit=limit)
 
 
+
+
+@app.get("/api/dashboard/whatsapp-health", dependencies=[Depends(verify_dashboard_auth)])
+async def get_dashboard_whatsapp_health() -> Dict[str, Any]:
+    """
+    Owner Dashboard endpoint for WhatsApp Cloud API health, authentication status,
+    and 24-hour message delivery metrics.
+    """
+    return await whatsapp_health_service.get_dashboard_diagnostic()
+
+
+@app.get("/api/dashboard/audit-trail", dependencies=[Depends(verify_dashboard_auth)])
+async def get_dashboard_audit_trail(
+    phone: Optional[str] = Query(None),
+    correlation_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+) -> List[Dict[str, Any]]:
+    """
+    Owner Dashboard endpoint for querying the message audit trail.
+    """
+    return audit_service.get_recent_events(phone=phone, correlation_id=correlation_id, limit=limit)
 
 
 @app.get("/api/dashboard/customers", dependencies=[Depends(verify_dashboard_auth)])

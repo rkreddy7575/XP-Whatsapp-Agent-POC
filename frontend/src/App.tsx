@@ -8,6 +8,7 @@ import { OrderList } from './components/OrderList';
 import { OrderDetailsModal } from './components/OrderDetailsModal';
 import { EnquiriesModal } from './components/EnquiriesModal';
 import { LoginModal } from './components/LoginModal';
+import { WhatsAppHealthCard } from './components/WhatsAppHealthCard';
 
 export const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => !!getAuthToken());
@@ -142,6 +143,9 @@ export const App: React.FC = () => {
         pendingQuotesCount={pendingQuotesCount}
         onSelectEnquiries={() => setIsEnquiriesOpen(true)}
       />
+
+      {/* WhatsApp Cloud API & Delivery Observability Health Card */}
+      {isAuthenticated && <WhatsAppHealthCard />}
 
       {/* API Error State */}
       {error && (

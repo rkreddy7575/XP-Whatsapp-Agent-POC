@@ -245,8 +245,15 @@ class ConversationService:
                     message_text TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     channel_message_id TEXT,
+                    status TEXT DEFAULT 'SENT',
                     FOREIGN KEY (conversation_id) REFERENCES conversations (conversation_id)
                 );
+            """)
+            try:
+                cursor.execute("ALTER TABLE conversation_messages ADD COLUMN status TEXT DEFAULT 'SENT'")
+            except sqlite3.OperationalError:
+                pass
+            cursor.execute("""
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_conversations_phone ON conversations (customer_phone);
@@ -370,6 +377,7 @@ class ConversationService:
         direction: MessageDirection,
         message_text: str,
         channel_message_id: Optional[str] = None,
+        status: Optional[str] = None,
     ) -> ConversationMessage:
         """Appends an incoming or outgoing message to message history."""
         if channel_message_id:
@@ -387,15 +395,16 @@ class ConversationService:
                 )
             except Exception:
                 pass
+        msg_status = status or ("RECEIVED" if direction == MessageDirection.INBOUND else "SENT")
         now_iso = datetime.now().isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO conversation_messages (conversation_id, direction, message_text, timestamp, channel_message_id)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO conversation_messages (conversation_id, direction, message_text, timestamp, channel_message_id, status)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (conversation_id, direction.value, message_text, now_iso, channel_message_id),
+                (conversation_id, direction.value, message_text, now_iso, channel_message_id, msg_status),
             )
             msg_id = cursor.lastrowid
             cursor.execute(
@@ -410,7 +419,47 @@ class ConversationService:
                 message_text=message_text,
                 timestamp=now_iso,
                 channel_message_id=channel_message_id,
+                status=msg_status,
             )
+
+    def update_message_status(self, channel_message_id: str, status: str) -> bool:
+        """Updates the delivery status of a message identified by channel_message_id/wamid."""
+        if not channel_message_id:
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE conversation_messages SET status = ? WHERE channel_message_id = ?",
+                (status.upper(), channel_message_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update_latest_outbound_wamid(self, conversation_id: str, channel_message_id: str) -> bool:
+        """Updates the most recent OUTBOUND message in a conversation with its channel_message_id/wamid."""
+        if not channel_message_id or not conversation_id:
+            return False
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE conversation_messages
+                    SET channel_message_id = ?, status = 'SENT'
+                    WHERE id = (
+                        SELECT id FROM conversation_messages
+                        WHERE conversation_id = ? AND direction = 'OUTBOUND'
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    )
+                    """,
+                    (channel_message_id, conversation_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as exc:
+            logger.warning("Failed to update latest outbound wamid: %s", exc)
+            return False
 
     def is_message_processed(self, channel_message_id: Optional[str]) -> bool:
         """
@@ -482,6 +531,8 @@ class ConversationService:
                                 direction=md,
                                 message_text=m.get("message_text", ""),
                                 timestamp=m.get("timestamp", ""),
+                                channel_message_id=m.get("channel_message_id"),
+                                status=m.get("status"),
                             )
                         )
                     return res
@@ -509,6 +560,7 @@ class ConversationService:
                     message_text=r["message_text"],
                     timestamp=r["timestamp"],
                     channel_message_id=r["channel_message_id"] if "channel_message_id" in r.keys() else None,
+                    status=r["status"] if "status" in r.keys() else None,
                 )
                 for r in rows
             ]

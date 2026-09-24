@@ -163,3 +163,61 @@ export async function fetchEnquiries(): Promise<Enquiry[]> {
 
   return response.json();
 }
+
+export interface WhatsAppHealthDiagnostic {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  webhook: string;
+  credentials: string;
+  meta_api: string;
+  phone_number_id?: string;
+  token_status?: string;
+  token_type?: string;
+  meta_error?: {
+    code?: number;
+    error_subcode?: number;
+    type?: string;
+    message?: string;
+  };
+  metrics_24h?: {
+    total_received: number;
+    total_sent: number;
+    total_delivered: number;
+    total_failed: number;
+    failure_rate_percent: number;
+  };
+  last_incoming_message?: {
+    phone: string;
+    wamid?: string;
+    timestamp: string;
+  };
+  last_outbound_message?: {
+    phone: string;
+    wamid?: string;
+    status: string;
+    timestamp: string;
+  };
+  recent_failures?: Array<{
+    correlation_id: string;
+    phone: string;
+    timestamp: string;
+    code?: number;
+    type?: string;
+    error_message?: string;
+  }>;
+}
+
+export async function fetchWhatsAppHealth(): Promise<WhatsAppHealthDiagnostic> {
+  const response = await fetch(`${API_BASE}/dashboard/whatsapp-health`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      clearAuthToken();
+      throw new Error('401 Unauthorized: Session expired or invalid credentials');
+    }
+    throw new Error(`Failed to load WhatsApp health: ${response.status}`);
+  }
+
+  return response.json();
+}
