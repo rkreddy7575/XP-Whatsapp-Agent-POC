@@ -75,6 +75,7 @@ class TestCategoryBrowsingFlow(unittest.TestCase):
         # Reset conversation state
         conv = conversation_service.get_or_create_conversation(self.sender)
         conversation_service.clear_selection(conv.conversation_id)
+        conversation_service.clear_pending_quote(conv.conversation_id)
         conversation_service.set_candidates(conv.conversation_id, [])
 
     @patch("services.gemini_service.gemini_service.parse_intent")

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Supabase Data Models & Schemas
 Compatible with Supabase PostgreSQL schema (Migration 001).
 Maintains strict multi-tenant structure (tenant_id) while preserving
@@ -228,3 +228,85 @@ class OrderStatusHistoryRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class InventoryRecord:
+    sku: str
+    tenant_id: str = "default"
+    normalized_sku: str = ""
+    physical_quantity: Optional[int] = None
+    reserved_quantity: int = 0
+    reorder_level: int = 100
+    unit_cost: Optional[float] = None
+    status: str = "UNKNOWN"
+    supplier_id: Optional[str] = None
+    last_updated: Optional[str] = None
+    created_at: Optional[str] = None
+    id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.sku = normalize_sku(self.sku)
+        if not self.normalized_sku:
+            self.normalized_sku = self.sku
+        if self.physical_quantity is not None:
+            self.physical_quantity = max(0, int(self.physical_quantity))
+        self.reserved_quantity = max(0, int(self.reserved_quantity or 0))
+        self.reorder_level = max(0, int(self.reorder_level or 0))
+        if self.unit_cost is not None:
+            self.unit_cost = round(float(self.unit_cost), 2)
+
+    @property
+    def available_quantity(self) -> Optional[int]:
+        if self.physical_quantity is None:
+            return None
+        return max(0, self.physical_quantity - self.reserved_quantity)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["available_quantity"] = self.available_quantity
+        if not d.get("id"):
+            d.pop("id", None)
+        return d
+
+
+@dataclass
+class InventoryTransactionRecord:
+    sku: str
+    transaction_type: str
+    quantity_change: int
+    quantity_before: int
+    quantity_after: int
+    id: Optional[str] = None
+    tenant_id: str = "default"
+    reason: Optional[str] = None
+    reference_type: Optional[str] = None
+    reference_id: Optional[str] = None
+    notes: Optional[str] = None
+    created_by: str = "owner"
+    created_at: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MessageAuditEventRecord:
+    correlation_id: str
+    direction: str  # INBOUND or OUTBOUND
+    event_type: str  # RECEIVED, META_ACCEPTED, SENT, DELIVERED, READ, FAILED
+    tenant_id: str = "default"
+    channel_message_id: Optional[str] = None  # wamid
+    customer_phone: str = "UNKNOWN"
+    status: Optional[str] = None
+    details: Dict[str, Any] = field(default_factory=dict)
+    is_test: bool = False
+    created_at: Optional[str] = None
+    id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        if not d.get("id"):
+            d.pop("id", None)
+        return d

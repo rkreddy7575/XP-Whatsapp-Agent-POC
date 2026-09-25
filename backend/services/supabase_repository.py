@@ -1,4 +1,4 @@
-﻿"""
+"""
 Supabase Repository & Data Access Layer
 Provides clean abstractions for all 8 required repositories:
 - SupabaseProductRepository
@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -36,6 +36,7 @@ from services.supabase_models import (
     OrderRecord,
     OrderItemRecord,
     OrderStatusHistoryRecord,
+    MessageAuditEventRecord,
     normalize_sku,
     clean_sku_key,
 )
@@ -563,3 +564,433 @@ class SupabaseOrderRepository:
             "order_id": f"eq.{order_id}",
             "order": "created_at.asc",
         })
+
+
+# =============================================================================
+# 9. SupabaseAuditRepository
+# =============================================================================
+class SupabaseAuditRepository:
+    """
+    Durable Supabase repository for WhatsApp message observability, delivery
+    status tracking, and 24h dashboard reliability metrics.
+    """
+
+    def __init__(self, client: Optional[SupabaseClient] = None, tenant_id: str = "default"):
+        self.client = client or SupabaseClient()
+        self.tenant_id = tenant_id
+
+    @property
+    def is_configured(self) -> bool:
+        return self.client.is_configured
+
+    def record_event(
+        self,
+        correlation_id: str,
+        customer_phone: str = "UNKNOWN",
+        direction: str = "INBOUND",
+        event_type: str = "UNKNOWN",
+        status: Optional[str] = None,
+        wamid: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        is_test: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Persists a lifecycle audit event to the durable Supabase store."""
+        if not self.is_configured:
+            return None
+
+        clean_phone = customer_phone.lstrip("+").strip() if customer_phone else "UNKNOWN"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "tenant_id": self.tenant_id,
+            "correlation_id": correlation_id,
+            "channel_message_id": wamid,
+            "customer_phone": clean_phone or "UNKNOWN",
+            "direction": direction.upper(),
+            "event_type": event_type.upper(),
+            "status": status.upper() if status else None,
+            "details": details or {},
+            "is_test": bool(is_test),
+            "created_at": now_iso,
+        }
+        try:
+            res = self.client.insert("message_audit_events", payload)
+            return res[0] if res else None
+        except Exception as exc:
+            logger.error("Supabase audit insert failed for %s (%s): %s", correlation_id, event_type, exc)
+            raise
+
+    def get_metrics_summary(self, hours: int = 24, production_only: bool = True) -> Dict[str, Any]:
+        """
+        Calculates operational health and volume metrics from the durable Supabase store
+        over a specified rolling window (default 24h).
+        Accurately computes failure rate percentage when denominator > 0.
+        """
+        if not self.is_configured:
+            return {
+                "total_received": 0,
+                "total_inbound": 0,
+                "total_sent": 0,
+                "total_accepted": 0,
+                "total_delivered": 0,
+                "total_read": 0,
+                "total_failed": 0,
+                "failure_rate_percent": None,
+                "hours_window": hours,
+                "last_inbound": None,
+                "last_outbound": None,
+                "last_failure": None,
+            }
+
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        params = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "created_at": f"gte.{cutoff_iso}",
+            "order": "created_at.desc",
+            "limit": "5000",
+        }
+        if production_only:
+            params["is_test"] = "eq.false"
+
+        try:
+            events = self.client.select("message_audit_events", params)
+        except Exception as exc:
+            logger.error("Supabase select message_audit_events failed: %s", exc)
+            events = []
+
+        total_received = sum(1 for e in events if e.get("event_type") == "RECEIVED")
+        total_accepted = sum(1 for e in events if e.get("event_type") == "META_ACCEPTED")
+        total_sent = total_accepted + sum(1 for e in events if e.get("event_type") == "SENT")
+        total_delivered = sum(1 for e in events if e.get("event_type") == "DELIVERED")
+        total_read = sum(1 for e in events if e.get("event_type") == "READ")
+        total_failed = sum(1 for e in events if e.get("event_type") == "FAILED" or e.get("status") == "FAILED")
+
+        outbound_attempts = total_sent + total_failed
+        if outbound_attempts > 0:
+            failure_rate_percent = round((total_failed / outbound_attempts) * 100.0, 1)
+        else:
+            failure_rate_percent = None
+
+        # Last inbound in 24h window (or lifetime query)
+        last_inbound = next(
+            (
+                e for e in events
+                if e.get("direction") == "INBOUND"
+                and e.get("event_type") == "RECEIVED"
+                and e.get("customer_phone")
+                and e.get("customer_phone") != "UNKNOWN"
+            ),
+            None,
+        )
+        if not last_inbound:
+            last_in_params = {
+                "tenant_id": f"eq.{self.tenant_id}",
+                "direction": "eq.INBOUND",
+                "event_type": "eq.RECEIVED",
+                "order": "created_at.desc",
+                "limit": "1",
+            }
+            if production_only:
+                last_in_params["is_test"] = "eq.false"
+                last_in_params["customer_phone"] = "neq.UNKNOWN"
+            res = self.client.select("message_audit_events", last_in_params)
+            last_inbound = res[0] if res else None
+
+        # Last outbound in 24h window (or lifetime query)
+        last_outbound = next(
+            (
+                e for e in events
+                if e.get("direction") == "OUTBOUND"
+                and e.get("event_type") in ("META_ACCEPTED", "SENT")
+                and e.get("customer_phone")
+                and e.get("customer_phone") != "UNKNOWN"
+            ),
+            None,
+        )
+        if not last_outbound:
+            last_out_params = {
+                "tenant_id": f"eq.{self.tenant_id}",
+                "direction": "eq.OUTBOUND",
+                "event_type": "in.(META_ACCEPTED,SENT)",
+                "order": "created_at.desc",
+                "limit": "1",
+            }
+            if production_only:
+                last_out_params["is_test"] = "eq.false"
+                last_out_params["customer_phone"] = "neq.UNKNOWN"
+            res = self.client.select("message_audit_events", last_out_params)
+            last_outbound = res[0] if res else None
+
+        # Last failure
+        last_failure = next(
+            (e for e in events if e.get("event_type") == "FAILED" or e.get("status") == "FAILED"),
+            None,
+        )
+        if not last_failure:
+            last_fail_params = {
+                "tenant_id": f"eq.{self.tenant_id}",
+                "or": "(event_type.eq.FAILED,status.eq.FAILED)",
+                "order": "created_at.desc",
+                "limit": "1",
+            }
+            if production_only:
+                last_fail_params["is_test"] = "eq.false"
+            res = self.client.select("message_audit_events", last_fail_params)
+            last_failure = res[0] if res else None
+
+        return {
+            "total_received": total_received,
+            "total_inbound": total_received,
+            "total_sent": total_sent,
+            "total_accepted": total_accepted,
+            "total_delivered": total_delivered,
+            "total_read": total_read,
+            "total_failed": total_failed,
+            "failure_rate_percent": failure_rate_percent,
+            "hours_window": hours,
+            "last_inbound": last_inbound,
+            "last_outbound": last_outbound,
+            "last_failure": last_failure,
+        }
+
+    def get_last_event_by_direction(self, direction: str, production_only: bool = True) -> Optional[Dict[str, Any]]:
+        """Returns the most recent event for a given direction."""
+        if not self.is_configured:
+            return None
+        params = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "direction": f"eq.{direction.upper()}",
+            "order": "created_at.desc",
+            "limit": "1",
+        }
+        if production_only:
+            params["is_test"] = "eq.false"
+            params["customer_phone"] = "neq.UNKNOWN"
+        res = self.client.select("message_audit_events", params)
+        return res[0] if res else None
+
+    def get_recent_failures(self, limit: int = 5, production_only: bool = True) -> List[Dict[str, Any]]:
+        """Returns recent failure events."""
+        if not self.is_configured:
+            return []
+        params = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "or": "(event_type.eq.FAILED,status.eq.FAILED)",
+            "order": "created_at.desc",
+            "limit": str(limit),
+        }
+        if production_only:
+            params["is_test"] = "eq.false"
+        rows = self.client.select("message_audit_events", params)
+        failures = []
+        for r in rows:
+            det = r.get("details", {})
+            failures.append({
+                "correlation_id": r.get("correlation_id"),
+                "phone": r.get("customer_phone"),
+                "timestamp": r.get("created_at"),
+                "code": det.get("error_code") if isinstance(det, dict) else None,
+                "type": det.get("error_type") if isinstance(det, dict) else None,
+                "error_message": det.get("error_message") if isinstance(det, dict) else None,
+            })
+        return failures
+
+    def get_recent_events(
+        self,
+        limit: int = 50,
+        correlation_id: Optional[str] = None,
+        wamid: Optional[str] = None,
+        phone: Optional[str] = None,
+        event_type: Optional[str] = None,
+        production_only: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Returns recent audit events, optionally filtered."""
+        if not self.is_configured:
+            return []
+        params = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "order": "created_at.desc",
+            "limit": str(limit),
+        }
+        if production_only and not correlation_id and not wamid:
+            params["is_test"] = "eq.false"
+        if correlation_id:
+            params["correlation_id"] = f"eq.{correlation_id}"
+        if wamid:
+            params["channel_message_id"] = f"eq.{wamid}"
+        if phone:
+            params["customer_phone"] = f"eq.{phone.lstrip('+').strip()}"
+        if event_type:
+            params["event_type"] = f"eq.{event_type.upper()}"
+
+        return self.client.select("message_audit_events", params)
+
+    def lookup_phone_by_wamid(self, wamid: str) -> Optional[str]:
+        """Looks up the customer phone associated with an outbound wamid."""
+        if not self.is_configured or not wamid:
+            return None
+        params = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "channel_message_id": f"eq.{wamid}",
+            "customer_phone": "neq.UNKNOWN",
+            "limit": "1",
+        }
+        res = self.client.select("message_audit_events", params)
+        if res and res[0].get("customer_phone"):
+            return res[0]["customer_phone"]
+        return None
+
+
+# =============================================================================
+# 11. SupabaseInventoryRepository
+# =============================================================================
+class SupabaseInventoryRepository:
+    """
+    Durable Supabase PostgreSQL repository for inventory stock levels
+    and immutable inventory_transactions audit history.
+    Multi-tenant aware: Logical uniqueness on (tenant_id, sku).
+    All reads and writes are strictly scoped to self.tenant_id.
+    """
+
+    def __init__(
+        self,
+        client: Optional[SupabaseClient] = None,
+        tenant_id: str = "default",
+    ):
+        self.client = client or SupabaseClient()
+        self.tenant_id = tenant_id
+
+    @property
+    def is_configured(self) -> bool:
+        return self.client.is_configured
+
+    def get_inventory(self, sku: str) -> Optional[Dict[str, Any]]:
+        """Fetches a single inventory record scoped to tenant_id and sku."""
+        if not self.is_configured:
+            return None
+        norm_sku = sku.strip().upper()
+        params = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "sku": f"eq.{norm_sku}",
+            "limit": "1",
+        }
+        res = self.client.select("inventory", params)
+        return res[0] if res else None
+
+    def get_all_inventory_map(self, tenant_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        """Fetches all inventory records for the tenant as a dictionary keyed by SKU."""
+        if not self.is_configured:
+            return {}
+        target_tenant = tenant_id or self.tenant_id
+        params = {"tenant_id": f"eq.{target_tenant}"}
+        res = self.client.select("inventory", params)
+        return {row["sku"].strip().upper(): row for row in res if "sku" in row}
+
+    def upsert_inventory_item(
+        self,
+        sku: str,
+        physical_quantity: Optional[int] = None,
+        reserved_quantity: int = 0,
+        reorder_level: int = 100,
+        unit_cost: Optional[float] = None,
+        status: str = "UNKNOWN",
+        supplier_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Inserts or updates an inventory record with composite conflict resolution on (tenant_id, sku).
+        Preserves UNKNOWN state when physical_quantity is None.
+        """
+        if not self.is_configured:
+            raise RuntimeError("Supabase production inventory repository is not configured")
+        norm_sku = sku.strip().upper()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        payload: Dict[str, Any] = {
+            "tenant_id": self.tenant_id,
+            "sku": norm_sku,
+            "physical_quantity": physical_quantity,
+            "reserved_quantity": reserved_quantity,
+            "reorder_level": reorder_level,
+            "status": status,
+            "last_updated": now_iso,
+        }
+        if unit_cost is not None:
+            payload["unit_cost"] = unit_cost
+        if supplier_id is not None:
+            payload["supplier_id"] = supplier_id
+
+        res = self.client.insert("inventory", payload, on_conflict="tenant_id,sku")
+        if not res:
+            raise RuntimeError(f"Failed to upsert inventory record for {norm_sku} in Supabase")
+        return res[0] if isinstance(res, list) and res else payload
+
+    def record_transaction(
+        self,
+        sku: str,
+        transaction_type: str,
+        quantity_change: int,
+        quantity_before: Optional[int],
+        quantity_after: Optional[int],
+        reason: Optional[str] = None,
+        reference_type: Optional[str] = None,
+        reference_id: Optional[str] = None,
+        notes: Optional[str] = None,
+        created_by: str = "owner",
+    ) -> Optional[Dict[str, Any]]:
+        """Appends an immutable audit record to inventory_transactions in Supabase."""
+        if not self.is_configured:
+            raise RuntimeError("Supabase production inventory repository is not configured")
+        norm_sku = sku.strip().upper()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        payload: Dict[str, Any] = {
+            "tenant_id": self.tenant_id,
+            "sku": norm_sku,
+            "transaction_type": transaction_type,
+            "quantity_change": quantity_change,
+            "quantity_before": quantity_before,
+            "quantity_after": quantity_after,
+            "reason": reason or "",
+            "reference_type": reference_type,
+            "reference_id": reference_id,
+            "notes": notes,
+            "created_by": created_by,
+            "created_at": now_iso,
+        }
+        res = self.client.insert("inventory_transactions", payload)
+        if not res:
+            raise RuntimeError(f"Failed to persist inventory transaction for {norm_sku} in Supabase")
+        return res[0] if isinstance(res, list) and res else payload
+
+    def get_transactions(
+        self,
+        sku: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Fetches recent transactions for the tenant, optionally filtered by SKU."""
+        if not self.is_configured:
+            return []
+        params: Dict[str, Any] = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "order": "created_at.desc",
+            "limit": str(limit),
+        }
+        if sku:
+            params["sku"] = f"eq.{sku.strip().upper()}"
+        return self.client.select("inventory_transactions", params)
+
+    def delete_inventory(self, sku: str) -> bool:
+        """Deletes an inventory item scoped to tenant_id and sku (useful for tests)."""
+        if not self.is_configured:
+            return False
+        norm_sku = sku.strip().upper()
+        return self.client.delete(
+            "inventory",
+            {"tenant_id": f"eq.{self.tenant_id}", "sku": f"eq.{norm_sku}"},
+        )
+
+    def delete_transaction(self, tx_id: str) -> bool:
+        """Deletes a transaction record by ID (useful for tests)."""
+        if not self.is_configured:
+            return False
+        return self.client.delete(
+            "inventory_transactions",
+            {"tenant_id": f"eq.{self.tenant_id}", "id": f"eq.{tx_id}"},
+        )

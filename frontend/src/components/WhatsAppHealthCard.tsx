@@ -37,13 +37,13 @@ export const WhatsAppHealthCard: React.FC = () => {
         return <span style={{ color: '#34d399', fontWeight: 600 }}>● {status.toUpperCase()}</span>;
       case 'degraded':
       case 'expired':
-        return <span style={{ color: '#fbbf24', fontWeight: 600 }}>▲ {status.toUpperCase()}</span>;
+        return <span style={{ color: '#fbbf24', fontWeight: 600 }}>● {status.toUpperCase()}</span>;
       case 'unhealthy':
       case 'invalid':
       case 'unreachable':
       case 'unconfigured':
       default:
-        return <span style={{ color: '#fb7185', fontWeight: 600 }}>✖ {status.toUpperCase()}</span>;
+        return <span style={{ color: '#fb7185', fontWeight: 600 }}>● {status.toUpperCase()}</span>;
     }
   };
 
@@ -69,7 +69,7 @@ export const WhatsAppHealthCard: React.FC = () => {
         onClick={() => setCollapsed(!collapsed)}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '1.25rem' }}>📱</span>
+          <span style={{ fontSize: '1.25rem' }}>⚡</span>
           <div>
             <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>
               WhatsApp Engine & Webhook Reliability
@@ -177,15 +177,15 @@ export const WhatsAppHealthCard: React.FC = () => {
                 <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>LAST INCOMING MSG</div>
                   <div style={{ fontSize: '0.85rem', marginTop: '0.25rem', color: 'var(--text-primary)' }}>
-                    {health.last_incoming_message ? (
+                    {health.last_incoming_message && health.last_incoming_message.phone ? (
                       <>
                         +{health.last_incoming_message.phone}
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                          {new Date(health.last_incoming_message.timestamp).toLocaleTimeString()}
+                          {new Date(health.last_incoming_message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                         </div>
                       </>
                     ) : (
-                      'None recorded'
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No production messages yet</span>
                     )}
                   </div>
                 </div>
@@ -193,15 +193,15 @@ export const WhatsAppHealthCard: React.FC = () => {
                 <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>LAST OUTBOUND STATUS</div>
                   <div style={{ fontSize: '0.85rem', marginTop: '0.25rem', color: 'var(--text-primary)' }}>
-                    {health.last_outbound_message ? (
+                    {health.last_outbound_message && health.last_outbound_message.phone ? (
                       <>
                         <span style={{ fontWeight: 600 }}>{health.last_outbound_message.status}</span> (+{health.last_outbound_message.phone})
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                          {new Date(health.last_outbound_message.timestamp).toLocaleTimeString()}
+                          {new Date(health.last_outbound_message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                         </div>
                       </>
                     ) : (
-                      'None recorded'
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No production messages yet</span>
                     )}
                   </div>
                 </div>
@@ -224,7 +224,24 @@ export const WhatsAppHealthCard: React.FC = () => {
                   <span>24h Sent: <strong style={{ color: 'var(--text-primary)' }}>{health.metrics_24h.total_sent}</strong></span>
                   <span>24h Delivered: <strong style={{ color: '#34d399' }}>{health.metrics_24h.total_delivered}</strong></span>
                   <span>24h Failed: <strong style={{ color: health.metrics_24h.total_failed > 0 ? '#fb7185' : 'var(--text-secondary)' }}>{health.metrics_24h.total_failed}</strong></span>
-                  <span>Failure Rate: <strong style={{ color: health.metrics_24h.failure_rate_percent > 5 ? '#fb7185' : 'var(--text-secondary)' }}>{health.metrics_24h.failure_rate_percent}%</strong></span>
+                  <span>
+                    Failure Rate:{' '}
+                    <strong
+                      style={{
+                        color:
+                          health.metrics_24h.failure_rate_percent !== null &&
+                          health.metrics_24h.failure_rate_percent !== undefined &&
+                          health.metrics_24h.failure_rate_percent > 5
+                            ? '#fb7185'
+                            : 'var(--text-secondary)',
+                      }}
+                    >
+                      {health.metrics_24h.failure_rate_percent !== null &&
+                      health.metrics_24h.failure_rate_percent !== undefined
+                        ? `${health.metrics_24h.failure_rate_percent}%`
+                        : 'N/A'}
+                    </strong>
+                  </span>
                 </div>
               )}
             </>

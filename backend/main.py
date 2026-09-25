@@ -851,3 +851,246 @@ async def get_conversation_detail(conversation_id: str) -> Dict[str, Any]:
         "order": matching_order,
         "journey_steps": journey_steps,
     }
+
+
+# ============================================================================
+# Inventory Management APIs (Owner Dashboard)
+# ============================================================================
+
+class StockAdjustRequest(BaseModel):
+    action: str = Field(..., description="Action: RECEIVE, ADD, REMOVE, CORRECTION, DAMAGED, SET")
+    quantity: int = Field(..., description="Quantity to adjust")
+    reason: Optional[str] = Field(None, description="Reason for adjustment")
+    notes: Optional[str] = Field(None, description="Optional notes")
+    unit_cost: Optional[float] = Field(None, description="Optional internal unit cost")
+
+
+class BulkStockAdjustRequest(BaseModel):
+    skus: List[str] = Field(..., description="List of SKUs to adjust")
+    action: str = Field(..., description="Action: RECEIVE, ADD, REMOVE, CORRECTION, DAMAGED, SET")
+    quantity: int = Field(..., description="Quantity to adjust per SKU")
+    reason: Optional[str] = Field(None, description="Reason for bulk adjustment")
+    notes: Optional[str] = Field(None, description="Optional notes")
+
+
+class BulkStatusUpdateRequest(BaseModel):
+    skus: List[str] = Field(..., description="List of SKUs")
+    status: str = Field(..., description="New inventory status")
+    reason: Optional[str] = Field(None, description="Reason for status change")
+
+
+class BulkReorderLevelRequest(BaseModel):
+    skus: List[str] = Field(..., description="List of SKUs")
+    reorder_level: int = Field(..., description="New reorder level")
+    reason: Optional[str] = Field(None, description="Reason for reorder level change")
+
+
+class ImportPreviewRequest(BaseModel):
+    rows: List[Dict[str, Any]] = Field(..., description="Raw row dictionaries from CSV/Excel")
+
+
+class ImportApplyRequest(BaseModel):
+    rows: List[Dict[str, Any]] = Field(..., description="Row dictionaries from CSV/Excel")
+    mode: str = Field("add", description="Import mode: 'add' or 'replace'")
+
+
+@app.get("/api/inventory", dependencies=[Depends(verify_dashboard_auth)])
+async def get_inventory_list(
+    page: Optional[int] = Query(None, ge=1),
+    pageSize: Optional[int] = Query(None, ge=1, le=2000),
+    limit: Optional[int] = Query(1000, ge=1, le=2000),
+    offset: Optional[int] = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    stockAttention: bool = Query(False),
+    stock_attention_only: bool = Query(False),
+    minQty: Optional[int] = Query(None),
+    maxQty: Optional[int] = Query(None),
+    sortBy: str = Query("sku"),
+    sortOrder: str = Query("asc"),
+) -> Dict[str, Any]:
+    """
+    Retrieve paginated inventory list for all catalogue items with search,
+    category filters, status filters, and sorting.
+    Defaults to returning all catalogue SKUs (up to 1000).
+    """
+    return inventory_service.list_inventory(
+        page=page,
+        page_size=pageSize,
+        limit=pageSize or limit or 1000,
+        offset=offset or 0,
+        search=search,
+        category=category,
+        status=status,
+        stock_attention=stockAttention or stock_attention_only,
+        min_qty=minQty,
+        max_qty=maxQty,
+        sort_by=sortBy,
+        sort_order=sortOrder,
+    )
+
+
+@app.get("/api/inventory/summary", dependencies=[Depends(verify_dashboard_auth)])
+async def get_inventory_summary() -> Dict[str, Any]:
+    """
+    Retrieve summary statistics across all catalogue SKUs:
+    total_skus, in_stock, low_stock, out_of_stock, unknown, stock_attention_count.
+    """
+    return inventory_service.get_summary()
+
+
+@app.get("/api/inventory/export", dependencies=[Depends(verify_dashboard_auth)])
+async def export_inventory_csv() -> PlainTextResponse:
+    """
+    Exports all catalogue inventory data as a CSV document.
+    """
+    csv_content = inventory_service.export_csv()
+    return PlainTextResponse(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inventory_export.csv"},
+    )
+
+
+@app.get("/api/inventory/{sku}", dependencies=[Depends(verify_dashboard_auth)])
+async def get_inventory_item(sku: str) -> Dict[str, Any]:
+    """
+    Retrieve single SKU inventory details.
+    """
+    item = inventory_service.get_inventory(sku)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"SKU '{sku}' not found in catalogue")
+    return item.to_dict()
+
+
+@app.get("/api/inventory/{sku}/history", dependencies=[Depends(verify_dashboard_auth)])
+async def get_inventory_history(
+    sku: str,
+    limit: int = Query(50, ge=1, le=200),
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve immutable audit transaction log for a specific product SKU.
+    """
+    txs = inventory_service.get_transactions(sku=sku, limit=limit)
+    return [t.to_dict() for t in txs]
+
+
+@app.post("/api/inventory/{sku}/adjust", dependencies=[Depends(verify_dashboard_auth)])
+async def adjust_sku_stock(sku: str, req: StockAdjustRequest) -> Dict[str, Any]:
+    """
+    Applies a stock adjustment to a single SKU and records an immutable transaction.
+    """
+    from services.inventory_provider import StockAction
+    try:
+        action_enum = StockAction(req.action.upper())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid action '{req.action}'. Supported: RECEIVE, ADD, REMOVE, CORRECTION, DAMAGED, SET")
+
+    if req.quantity < 0:
+        raise HTTPException(status_code=400, detail="Quantity cannot be negative")
+
+    item = inventory_service.adjust_stock(
+        sku=sku,
+        action=action_enum,
+        quantity=req.quantity,
+        reason=req.reason,
+        notes=req.notes,
+        user="owner",
+        unit_cost=req.unit_cost,
+    )
+    return item.to_dict()
+
+
+@app.post("/api/inventory/bulk/adjust", dependencies=[Depends(verify_dashboard_auth)])
+async def bulk_adjust_stock(req: BulkStockAdjustRequest) -> Dict[str, Any]:
+    """
+    Applies a stock adjustment to multiple SKUs simultaneously.
+    """
+    from services.inventory_provider import StockAction
+    try:
+        action_enum = StockAction(req.action.upper())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid action '{req.action}'")
+
+    if req.quantity < 0:
+        raise HTTPException(status_code=400, detail="Quantity cannot be negative")
+
+    updated = inventory_service.bulk_adjust(
+        skus=req.skus,
+        action=action_enum,
+        quantity=req.quantity,
+        reason=req.reason,
+        notes=req.notes,
+        user="owner",
+    )
+    return {
+        "updated_count": len(updated),
+        "items": [it.to_dict() for it in updated],
+    }
+
+
+@app.post("/api/inventory/bulk/status", dependencies=[Depends(verify_dashboard_auth)])
+async def bulk_update_status(req: BulkStatusUpdateRequest) -> Dict[str, Any]:
+    """
+    Updates status for multiple SKUs simultaneously.
+    """
+    from services.inventory_provider import InventoryStatus
+    try:
+        status_enum = InventoryStatus(req.status.upper())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid status '{req.status}'")
+
+    updated = inventory_service.bulk_update_status(
+        skus=req.skus,
+        status=status_enum,
+        reason=req.reason,
+        user="owner",
+    )
+    return {
+        "updated_count": len(updated),
+        "items": [it.to_dict() for it in updated],
+    }
+
+
+@app.post("/api/inventory/bulk/reorder-level", dependencies=[Depends(verify_dashboard_auth)])
+async def bulk_update_reorder_level(req: BulkReorderLevelRequest) -> Dict[str, Any]:
+    """
+    Updates reorder level for multiple SKUs simultaneously.
+    """
+    if req.reorder_level < 0:
+        raise HTTPException(status_code=400, detail="Reorder level cannot be negative")
+
+    updated = inventory_service.bulk_update_reorder_level(
+        skus=req.skus,
+        reorder_level=req.reorder_level,
+        reason=req.reason,
+        user="owner",
+    )
+    return {
+        "updated_count": len(updated),
+        "items": [it.to_dict() for it in updated],
+    }
+
+
+@app.post("/api/inventory/import/preview", dependencies=[Depends(verify_dashboard_auth)])
+async def preview_inventory_import(req: ImportPreviewRequest) -> Dict[str, Any]:
+    """
+    Dry-run validation of an uploaded CSV/Excel row set without applying changes.
+    """
+    return inventory_service.preview_import(req.rows)
+
+
+@app.post("/api/inventory/import/apply", dependencies=[Depends(verify_dashboard_auth)])
+async def apply_inventory_import(req: ImportApplyRequest) -> Dict[str, Any]:
+    """
+    Applies validated import rows with either 'add' or 'replace' mode.
+    """
+    if req.mode.lower() not in ("add", "replace"):
+        raise HTTPException(status_code=400, detail="Invalid import mode. Supported: 'add', 'replace'")
+
+    return inventory_service.apply_import(
+        rows=req.rows,
+        mode=req.mode.lower(),
+        user="owner",
+    )
