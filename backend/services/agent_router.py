@@ -188,8 +188,11 @@ class AgentRouter:
 
         # Fast-Path C: Category Browsing ("Categories", "category", "show categories", "browse categories", etc.)
         if is_category_browsing_intent(clean_text):
-            # Clear old product candidates so subsequent number selection selects category
+            # Invalidate stale quote, selection, and candidates so browsing starts clean
+            conversation_service.invalidate_quote_context(conv_id, customer_phone)
             conversation_service.set_candidates(conv_id, [])
+            self._search_contexts.pop(clean_phone, None)
+            self._pending_media_messages.pop(clean_phone, None)
             reply = catalogue_service.format_category_menu()
             self._finalize_reply(conv_id, "SHOW_CATEGORIES", reply)
             return reply
@@ -200,6 +203,7 @@ class AgentRouter:
         if sel_idx and conv.last_intent == "SHOW_CATEGORIES":
             cat_from_idx = catalogue_service.get_category_by_index(sel_idx)
             if cat_from_idx:
+                conversation_service.invalidate_quote_context(conv_id, customer_phone)
                 candidates = catalogue_service.search_products(category=cat_from_idx, limit=5)
                 all_skus = [c.get("sku") for c in candidates if c.get("sku")]
                 for c in candidates:
@@ -223,6 +227,7 @@ class AgentRouter:
         # Subcase 2: By direct category name / alias (e.g. "Gift Sets", "combos", "mugs", "water bottles")
         matched_cat = catalogue_service.match_category_name(clean_text)
         if matched_cat:
+            conversation_service.invalidate_quote_context(conv_id, customer_phone)
             candidates = catalogue_service.search_products(category=matched_cat, limit=5)
             all_skus = [c.get("sku") for c in candidates if c.get("sku")]
             for c in candidates:
@@ -551,6 +556,7 @@ class AgentRouter:
                 "Reply with *Categories* to explore all available collections."
             )
 
+        conversation_service.invalidate_quote_context(conv_id, customer_phone)
         conversation_service.set_candidates(conv_id, candidates)
         target_qty = quantity or 100
         if quantity:
@@ -691,14 +697,31 @@ class AgentRouter:
         """
         conv_id = conv.conversation_id
         cand_idx = extract_candidate_index_from_image_request(message_text) if message_text else None
-        if not image_sku and cand_idx and conv.current_product_candidates and 1 <= cand_idx <= len(conv.current_product_candidates):
+
+        # Determine image target:
+        # 1. Explicit SKU in message (e.g. 'image GS-002', 'photo of XG-501')
+        # 2. Explicit candidate index (e.g. 'image 3', 'show image for 2')
+        # 3. Active candidates list displayed: inspect all active candidates (do NOT fall back to old quote)
+        # 4. Single product/quote context: only when no active candidates list is displayed
+        if image_sku:
+            target_sku = image_sku
+            is_single_sku = True
+        elif cand_idx and conv.current_product_candidates and 1 <= cand_idx <= len(conv.current_product_candidates):
             target_candidate = conv.current_product_candidates[cand_idx - 1]
             target_sku = target_candidate.get("sku")
+            is_single_sku = True
+        elif conv.selected_sku:
+            target_sku = conv.selected_sku
+            is_single_sku = True
+        elif conv.current_product_candidates:
+            target_sku = None
+            is_single_sku = False
         else:
-            target_sku = image_sku or conv.selected_sku or (conv.pending_quote.get("sku") if conv.pending_quote else None)
+            target_sku = conv.pending_quote.get("sku") if conv.pending_quote else None
+            is_single_sku = bool(target_sku)
 
         # --- Contextual or Explicit SKU Resolution ---
-        if target_sku:
+        if is_single_sku and target_sku:
             product = catalogue_service.get_by_sku(target_sku)
             canonical_sku = product.get("sku", target_sku) if product else target_sku
             image_url = catalogue_service.get_image_url(canonical_sku)
@@ -776,7 +799,14 @@ class AgentRouter:
             if c.get("sku") not in with_img_skus
         ]
 
-        if len(media_list) == len(candidates):
+        if not media_list:
+            cat_name = candidates[0].get("category", "these items") if candidates else "these items"
+            sku_list = ", ".join(f"`{c.get('sku', '')}`" for c in candidates)
+            reply = (
+                f"📷 Photos are not currently on file for these {cat_name} ({sku_list}).\n\n"
+                f"Which product would you like to see? Reply with the number or SKU."
+            )
+        elif len(media_list) == len(candidates):
             if len(candidates) == 1:
                 reply = "▪️ Which product would you like to see? Reply with 1 to select this product."
             elif len(candidates) == 2:
@@ -1009,9 +1039,16 @@ class AgentRouter:
         self, conv_id: str, customer_phone: str, customer_name: Optional[str]
     ) -> str:
         """Confirms an active pending quotation into a permanent order."""
+        conv = conversation_service.get_conversation(conv_id)
+        if not conv or not getattr(conv, "awaiting_confirmation", False) or not getattr(conv, "active_quote_id", None):
+            return (
+                "⚠️ You don't have an active quotation pending confirmation.\n\n"
+                "Please select a product and quantity first (e.g. *GS-002 100*) to get an instant quote!"
+            )
+
         pending = order_service.get_pending_quote(customer_phone)
         if not pending:
-            raw_quote = conversation_service.get_pending_quote(conv_id)
+            raw_quote = conv.pending_quote
             if raw_quote:
                 try:
                     pending = PriceQuoteResult(**raw_quote)
@@ -1024,15 +1061,29 @@ class AgentRouter:
         # 2. Quote must be available (priced)
         # 3. Quantity must be valid (> 0)
         # 4. SKU must be present
-        if pending and getattr(pending, "available", False) and getattr(pending, "quantity", 0) and pending.quantity > 0 and getattr(pending, "sku", None):
-            order = order_service.confirm_pending_order(customer_phone, customer_name=customer_name)
+        # 5. Quote ID must match active conversation quote context
+        # 6. Quote must not be already ordered
+        if (
+            pending
+            and getattr(pending, "available", False)
+            and getattr(pending, "quantity", 0) > 0
+            and getattr(pending, "sku", None)
+            and not getattr(pending, "is_ordered", False)
+            and (not getattr(pending, "quote_id", None) or pending.quote_id == conv.active_quote_id)
+        ):
+            order = order_service.confirm_pending_order(
+                customer_phone,
+                customer_name=customer_name,
+                quote_id=conv.active_quote_id,
+            )
             if not order:
                 return (
                     "⚠️ You don't have an active quotation pending confirmation.\n\n"
-                    "Please send a product code and quantity (e.g., *GS-002 100*) to get an instant quote first!"
+                    "Please select a product and quantity first (e.g. *GS-002 100*) to get an instant quote!"
                 )
             conversation_service.clear_pending_quote(conv_id)
             conversation_service.clear_selection(conv_id)
+            order_service.clear_pending_quote(customer_phone)
             try:
                 from services.supabase_repository import SupabaseClient, SupabaseEnquiryRepository
                 sb = SupabaseClient()
@@ -1049,7 +1100,7 @@ class AgentRouter:
         else:
             return (
                 "⚠️ You don't have an active quotation pending confirmation.\n\n"
-                "Please send a product code and quantity (e.g., *GS-002 100*) to get an instant quote first!"
+                "Please select a product and quantity first (e.g. *GS-002 100*) to get an instant quote!"
             )
 
     def _route_intent(
@@ -1068,6 +1119,7 @@ class AgentRouter:
         # INTENT: PRODUCT_SEARCH
         # ---------------------------------------------------------------------
         if intent.intent == IntentType.PRODUCT_SEARCH:
+            conversation_service.invalidate_quote_context(conv_id, customer_phone)
             vague_words = {"something", "anything", "stuff", "items", "item", "product", "products"}
             raw_q = (intent.query or "").strip().lower()
             if raw_q in vague_words and not intent.category and not intent.sku:

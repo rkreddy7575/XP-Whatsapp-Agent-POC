@@ -30,5 +30,7 @@ class Conversation:
     selected_sku: Optional[str] = None
     selected_quantity: Optional[int] = None
     pending_quote: Optional[Dict[str, Any]] = None
+    active_quote_id: Optional[str] = None
+    awaiting_confirmation: bool = False
     created_at: str = ""
     updated_at: str = ""

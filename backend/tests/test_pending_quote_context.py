@@ -68,15 +68,20 @@ def _setup_router_with_pending_quote(phone="919999000001"):
         "services.agent_router.order_service": order_svc,
     }
 
+    import copy
+    fresh_quote = copy.deepcopy(FAKE_QUOTE)
+    fresh_quote.is_ordered = False
+    fresh_quote.quote_id = None
+
     # Set up conversation state: product selected, pending quote
     conv = conv_svc.get_or_create_conversation(phone)
     conv_id = conv.conversation_id
     conv_svc.set_candidates(conv_id, FAKE_CANDIDATES)
     conv_svc.set_selected_product(conv_id, "GS-001", quantity=100)
-    conv_svc.set_pending_quote(conv_id, FAKE_QUOTE)
+    conv_svc.set_pending_quote(conv_id, fresh_quote)
 
     # Also set pending quote in order service
-    order_svc.set_pending_quote(phone, FAKE_QUOTE)
+    order_svc.set_pending_quote(phone, fresh_quote)
 
     return router, conv_svc, order_svc, phone, patches
 

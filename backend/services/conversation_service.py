@@ -126,6 +126,12 @@ class ConversationService:
             except Exception:
                 pending_quote = None
 
+        active_quote_id = sb_dict.get("active_quote_id")
+        awaiting_confirmation = bool(sb_dict.get("awaiting_confirmation", False))
+        if not active_quote_id and isinstance(pending_quote, dict):
+            active_quote_id = pending_quote.get("quote_id")
+            awaiting_confirmation = True if active_quote_id else False
+
         return Conversation(
             conversation_id=sb_dict.get("conversation_id", ""),
             customer_phone=sb_dict.get("customer_phone", ""),
@@ -134,6 +140,8 @@ class ConversationService:
             selected_sku=sb_dict.get("selected_sku"),
             selected_quantity=sb_dict.get("selected_quantity"),
             pending_quote=pending_quote,
+            active_quote_id=active_quote_id,
+            awaiting_confirmation=awaiting_confirmation,
             created_at=sb_dict.get("created_at", ""),
             updated_at=sb_dict.get("updated_at", ""),
         )
@@ -233,10 +241,19 @@ class ConversationService:
                     selected_sku TEXT,
                     selected_quantity INTEGER,
                     pending_quote TEXT,
+                    active_quote_id TEXT,
+                    awaiting_confirmation INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
             """)
+            cursor.execute("PRAGMA table_info(conversations)")
+            existing_cols = {col_info["name"] for col_info in cursor.fetchall()}
+            if "active_quote_id" not in existing_cols:
+                cursor.execute("ALTER TABLE conversations ADD COLUMN active_quote_id TEXT")
+            if "awaiting_confirmation" not in existing_cols:
+                cursor.execute("ALTER TABLE conversations ADD COLUMN awaiting_confirmation INTEGER DEFAULT 0")
+
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS conversation_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -287,6 +304,11 @@ class ConversationService:
         pending_quote_raw = row["pending_quote"]
         pending_quote = json.loads(pending_quote_raw) if pending_quote_raw else None
 
+        active_qid = row["active_quote_id"] if "active_quote_id" in row.keys() else None
+        if not active_qid and pending_quote:
+            active_qid = pending_quote.get("quote_id")
+        awaiting_conf = bool(row["awaiting_confirmation"]) if "awaiting_confirmation" in row.keys() else bool(pending_quote)
+
         return Conversation(
             conversation_id=row["conversation_id"],
             customer_phone=row["customer_phone"],
@@ -295,6 +317,8 @@ class ConversationService:
             selected_sku=row["selected_sku"],
             selected_quantity=row["selected_quantity"],
             pending_quote=pending_quote,
+            active_quote_id=active_qid,
+            awaiting_confirmation=awaiting_conf,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -675,13 +699,21 @@ class ConversationService:
 
     def set_pending_quote(self, conversation_id: str, quote: Any) -> None:
         """Caches active quote in conversation state (accepts PriceQuoteResult or dict)."""
+        import uuid
         now_iso = datetime.now().isoformat()
         if hasattr(quote, "__dict__"):
-            data = quote.__dict__
+            data = dict(quote.__dict__)
         elif isinstance(quote, dict):
-            data = quote
+            data = dict(quote)
         else:
             data = {"quote": str(quote)}
+
+        quote_id = data.get("quote_id")
+        if not quote_id:
+            quote_id = f"Q-{uuid.uuid4().hex[:8].upper()}"
+            data["quote_id"] = quote_id
+            if hasattr(quote, "quote_id"):
+                quote.quote_id = quote_id
 
         if self._is_supabase_primary:
             try:
@@ -700,10 +732,10 @@ class ConversationService:
             cursor.execute(
                 """
                 UPDATE conversations
-                SET pending_quote = ?, updated_at = ?
+                SET pending_quote = ?, active_quote_id = ?, awaiting_confirmation = 1, updated_at = ?
                 WHERE conversation_id = ?
                 """,
-                (serialized, now_iso, conversation_id),
+                (serialized, quote_id, now_iso, conversation_id),
             )
             conn.commit()
 
@@ -713,7 +745,7 @@ class ConversationService:
         return conv.pending_quote if conv else None
 
     def clear_pending_quote(self, conversation_id: str) -> None:
-        """Clears active quote from conversation state."""
+        """Clears active quote and confirmation state from conversation state."""
         if self._is_supabase_primary:
             try:
                 from services.supabase_repository import SupabaseClient, SupabaseConversationRepository
@@ -730,7 +762,7 @@ class ConversationService:
             cursor.execute(
                 """
                 UPDATE conversations
-                SET pending_quote = NULL, updated_at = ?
+                SET pending_quote = NULL, active_quote_id = NULL, awaiting_confirmation = 0, updated_at = ?
                 WHERE conversation_id = ?
                 """,
                 (now_iso, conversation_id),
@@ -762,6 +794,8 @@ class ConversationService:
                     selected_sku = NULL,
                     selected_quantity = NULL,
                     pending_quote = NULL,
+                    active_quote_id = NULL,
+                    awaiting_confirmation = 0,
                     updated_at = ?
                 WHERE conversation_id = ?
                 """,
@@ -789,6 +823,20 @@ class ConversationService:
                 (intent, now_iso, conversation_id),
             )
             conn.commit()
+
+    def invalidate_quote_context(self, conversation_id: str, customer_phone: Optional[str] = None) -> None:
+        """
+        Invalidates active quote, selection, and confirmation state when starting a new browsing flow.
+        Prevents stale quotations and confirmations from leaking into unrelated conversations.
+        """
+        self.clear_pending_quote(conversation_id)
+        self.clear_selection(conversation_id)
+        if customer_phone:
+            try:
+                from services.order_service import order_service
+                order_service.clear_pending_quote(customer_phone)
+            except Exception:
+                pass
 
     def list_active_enquiries(self, limit: int = 50) -> List[Dict[str, Any]]:
         """

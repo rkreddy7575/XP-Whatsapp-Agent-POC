@@ -1,4 +1,6 @@
 import sys
+import uuid
+from datetime import datetime
 import json
 import os
 import re
@@ -43,6 +45,10 @@ class PriceQuoteResult:
     bracket_from: Optional[int] = None
     bracket_to: Optional[int] = None
     message: Optional[str] = None
+    quote_id: Optional[str] = None
+    created_at: Optional[str] = None
+    is_ordered: bool = False
+    customer_phone: Optional[str] = None
 
 
 class PricingService:
@@ -200,6 +206,10 @@ class PricingService:
                     sb_quote = SupabasePricingRepository(sb).calculate_price(clean_sku, quantity)
                     if sb_quote and sb_quote.available:
                         sb_quote.sku = clean_sku
+                        if not getattr(sb_quote, "quote_id", None):
+                            sb_quote.quote_id = f"Q-{uuid.uuid4().hex[:8].upper()}"
+                        if not getattr(sb_quote, "created_at", None):
+                            sb_quote.created_at = datetime.now().isoformat()
                         return sb_quote
             except Exception:
                 pass
@@ -229,6 +239,8 @@ class PricingService:
         else:
             display_sku = ""
 
+        qid = f"Q-{uuid.uuid4().hex[:8].upper()}"
+        now_str = datetime.now().isoformat()
         return PriceQuoteResult(
             available=True,
             sku=display_sku,
@@ -247,7 +259,9 @@ class PricingService:
             pricing_version=rule.pricing_version,
             bracket_from=rule.quantity_from,
             bracket_to=rule.quantity_to,
-            message="Quote calculated successfully."
+            message="Quote calculated successfully.",
+            quote_id=qid,
+            created_at=now_str
         )
 
     def format_quotation(

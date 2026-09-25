@@ -294,6 +294,12 @@ class OrderService:
         Creates an immutable Order from an active PriceQuoteResult.
         Stores a frozen price snapshot.
         """
+        if quote is None:
+            raise ValueError("Cannot create order without an active quotation.")
+
+        if getattr(quote, "is_ordered", False):
+            raise ValueError("Quotation has already been converted into an order.")
+
         if not quote.available:
             raise ValueError(f"Cannot create order from an unavailable quotation: {quote.message}")
 
@@ -447,14 +453,32 @@ class OrderService:
         return order
 
     def confirm_pending_order(
-        self, customer_phone: str, customer_name: Optional[str] = None
+        self, customer_phone: str, customer_name: Optional[str] = None, quote_id: Optional[str] = None
     ) -> Optional[Order]:
         """
         Confirms a customer's active quotation into a persistent order, then clears the cache.
-        Returns None if no active quotation exists.
+        Returns None if no active quotation exists or if quote validation fails.
         """
         quote = self.get_pending_quote(customer_phone)
         if not quote:
+            return None
+
+        if quote_id and getattr(quote, "quote_id", None) and quote.quote_id != quote_id:
+            return None
+
+        if getattr(quote, "is_ordered", False):
+            return None
+
+        if not getattr(quote, "available", False):
+            return None
+
+        if getattr(quote, "quantity", 0) <= 0:
+            return None
+
+        if not getattr(quote, "sku", None):
+            return None
+
+        if quote.unit_price_excl_gst is None or quote.total_price_incl_gst is None:
             return None
 
         order = self.create_order_from_quote(
@@ -462,6 +486,7 @@ class OrderService:
             quote=quote,
             customer_name=customer_name,
         )
+        quote.is_ordered = True
         self.clear_pending_quote(customer_phone)
         return order
 
