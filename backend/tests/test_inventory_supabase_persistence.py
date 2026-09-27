@@ -161,15 +161,23 @@ class TestInventorySupabasePersistence(unittest.TestCase):
         self.assertEqual(len(txs), 1)
         self.assertEqual(txs[0]["reference_id"], "PO-999")
 
-    # 6. Stock adjustment updates inventory + transaction atomically
+    # 6. Stock adjustment updates inventory + transaction atomically via RPC
     def test_06_stock_adjustment_updates_inventory_and_transaction(self):
         mock_client = MagicMock()
         mock_client.is_configured = True
-        mock_client.select.return_value = []
-        mock_client.insert.side_effect = [
-            [{"sku": "SKU-ADJ-01", "physical_quantity": 25, "status": "LOW_STOCK"}],
-            [{"id": "tx-1", "sku": "SKU-ADJ-01", "quantity_change": 25}],
-        ]
+        mock_client.rpc.return_value = {
+            "sku": "SKU-ADJ-01",
+            "tenant_id": "tenant_adj",
+            "physical_quantity": 25,
+            "reserved_quantity": 0,
+            "reorder_level": 100,
+            "unit_cost": None,
+            "status": "LOW_STOCK",
+            "supplier_id": None,
+            "last_updated": "2026-09-28T00:00:00Z",
+            "transaction_id": "tx-1",
+            "already_applied": False,
+        }
 
         provider = SupabaseInventoryProvider(
             repo=SupabaseInventoryRepository(client=mock_client, tenant_id="tenant_adj"),
@@ -185,7 +193,14 @@ class TestInventorySupabasePersistence(unittest.TestCase):
         self.assertEqual(item.sku, "SKU-ADJ-01")
         self.assertEqual(item.physical_stock, 25)
         self.assertEqual(item.source, "SUPABASE_PERSISTED")
-        self.assertEqual(mock_client.insert.call_count, 2)
+        mock_client.rpc.assert_called_once()
+        rpc_call_args = mock_client.rpc.call_args
+        self.assertEqual(rpc_call_args[0][0], "adjust_inventory_stock_atomic")
+        payload = rpc_call_args[0][1]
+        self.assertEqual(payload["p_sku"], "SKU-ADJ-01")
+        self.assertEqual(payload["p_action"], "SET")
+        self.assertEqual(payload["p_quantity"], 25)
+        self.assertEqual(payload["p_tenant_id"], "tenant_adj")
 
     # 7. Bulk operations
     def test_07_bulk_operations(self):
@@ -229,7 +244,7 @@ class TestInventorySupabasePersistence(unittest.TestCase):
         self.assertEqual(preview["invalid_rows"], 0)
 
         # Apply import in REPLACE mode
-        res_replace = self.service.apply_import(rows, mode="replace", user="importer")
+        res_replace = self.service.apply_import(rows, mode="replace", user="importer", confirm_replace=True)
         self.assertEqual(res_replace["applied_count"], 2)
         self.assertEqual(self.service.get_inventory("GS-001").physical_stock, 200)
 
@@ -291,6 +306,152 @@ class TestInventorySupabasePersistence(unittest.TestCase):
         self.assertIn("total_sent", summary)
         self.assertIn("failure_rate_percent", summary)
 
+
+    # 13. Atomic RPC duplicate reference idempotency
+    def test_13_atomic_rpc_duplicate_reference_idempotency(self):
+        """Repeated request with existing reference returns current state without re-applying change."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.rpc.return_value = {
+            "sku": "SKU-DUP-01",
+            "tenant_id": "tenant_retry",
+            "physical_quantity": 50,
+            "reserved_quantity": 0,
+            "reorder_level": 100,
+            "unit_cost": None,
+            "status": "LOW_STOCK",
+            "supplier_id": None,
+            "last_updated": "2026-09-28T00:00:00Z",
+            "transaction_id": "tx-existing-123",
+            "already_applied": True,
+        }
+
+        provider = SupabaseInventoryProvider(
+            repo=SupabaseInventoryRepository(client=mock_client, tenant_id="tenant_retry"),
+            tenant_id="tenant_retry",
+        )
+        item = provider.adjust_stock(
+            sku="SKU-DUP-01",
+            action=StockAction.ADD,
+            quantity=20,
+            reference_type="IMPORT",
+            reference_id="batch_retry_001",
+        )
+        # Quantity must remain 50 as returned from DB, not 70
+        self.assertEqual(item.sku, "SKU-DUP-01")
+        self.assertEqual(item.physical_stock, 50)
+        mock_client.rpc.assert_called_once()
+        payload = mock_client.rpc.call_args[0][1]
+        self.assertEqual(payload["p_reference_id"], "batch_retry_001")
+        self.assertEqual(payload["p_reference_type"], "IMPORT")
+
+    # 14. Atomic RPC database failure safety
+    def test_14_atomic_rpc_database_failure_safety(self):
+        """If RPC encounters a DB failure during transaction execution, RuntimeError is raised cleanly."""
+        mock_client = MagicMock()
+        mock_client.is_configured = True
+        mock_client.rpc.side_effect = RuntimeError("Supabase RPC adjust_inventory_stock_atomic failed: 500 Internal Server Error")
+
+        provider = SupabaseInventoryProvider(
+            repo=SupabaseInventoryRepository(client=mock_client, tenant_id="tenant_fail"),
+            tenant_id="tenant_fail",
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            provider.adjust_stock(
+                sku="SKU-FAIL-01",
+                action=StockAction.ADD,
+                quantity=10,
+                reference_type="IMPORT",
+                reference_id="batch_fail_999",
+            )
+        self.assertIn("failed", str(ctx.exception).lower())
+
+    # 15. SQLite transaction atomicity and rollback
+    def test_15_sqlite_transaction_atomicity_and_rollback(self):
+        """Verifies that if transaction logging fails, stock update in inventory table is rolled back."""
+        import sqlite3
+        provider = SqliteInventoryProvider(db_path=":memory:", tenant_id="rollback_test")
+        # Pre-seed item with 50 stock
+        provider.adjust_stock(sku="SKU-ROLLBACK", action=StockAction.SET, quantity=50)
+        self.assertEqual(provider.get_inventory("SKU-ROLLBACK").physical_stock, 50)
+
+        # Create a database trigger to simulate a failure specifically on inserting the transaction log
+        conn = provider._get_connection()
+        conn.execute(
+            """
+            CREATE TRIGGER fail_tx_insert BEFORE INSERT ON inventory_transactions
+            WHEN NEW.sku = 'SKU-ROLLBACK'
+            BEGIN
+                SELECT RAISE(ABORT, 'Simulated transaction audit log failure');
+            END;
+            """
+        )
+
+        with self.assertRaises(sqlite3.DatabaseError):
+            provider.adjust_stock(
+                sku="SKU-ROLLBACK",
+                action=StockAction.ADD,
+                quantity=100,
+            )
+
+        # Inventory must NOT be 150! The transaction rolled back, leaving physical_stock at 50
+        item_after = provider.get_inventory("SKU-ROLLBACK")
+        self.assertEqual(item_after.physical_stock, 50)
+
+    # 16. SQLite duplicate reference idempotency
+    def test_16_sqlite_duplicate_reference_idempotency(self):
+        """Calling adjust_stock with the same reference_id does not re-apply stock changes."""
+        provider = SqliteInventoryProvider(db_path=":memory:", tenant_id="idem_test")
+        # First call adds 30
+        item1 = provider.adjust_stock(
+            sku="SKU-IDEM",
+            action=StockAction.ADD,
+            quantity=30,
+            reference_type="IMPORT",
+            reference_id="ref_uniq_42",
+        )
+        self.assertEqual(item1.physical_stock, 30)
+
+        # Second call with SAME reference_id should not add 30 again
+        item2 = provider.adjust_stock(
+            sku="SKU-IDEM",
+            action=StockAction.ADD,
+            quantity=30,
+            reference_type="IMPORT",
+            reference_id="ref_uniq_42",
+        )
+        self.assertEqual(item2.physical_stock, 30)
+
+        # Verify only 1 transaction was logged
+        txs = provider.get_transactions("SKU-IDEM")
+        self.assertEqual(len(txs), 1)
+
+    # 17. SQLite partial unique index prevents duplicate reference transactions
+    def test_17_sqlite_unique_constraint_enforcement(self):
+        """Unique index on (tenant_id, reference_type, reference_id, sku) enforces DB-level uniqueness."""
+        import sqlite3
+        provider = SqliteInventoryProvider(db_path=":memory:", tenant_id="const_test")
+        conn = provider._get_connection()
+        conn.execute(
+            """
+            INSERT INTO inventory_transactions (
+                id, tenant_id, sku, transaction_type, quantity_change,
+                quantity_before, quantity_after, reason, reference_type,
+                reference_id, notes, created_by, created_at
+            ) VALUES ('tx-1', 'const_test', 'SKU-C1', 'ADD', 10, 0, 10, 'r', 'IMPORT', 'BATCH-99', '', 'u', '2026-09-28')
+            """
+        )
+        # Attempting to insert duplicate reference for the same tenant+ref_type+ref_id+sku must fail with IntegrityError
+        with self.assertRaises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO inventory_transactions (
+                    id, tenant_id, sku, transaction_type, quantity_change,
+                    quantity_before, quantity_after, reason, reference_type,
+                    reference_id, notes, created_by, created_at
+                ) VALUES ('tx-2', 'const_test', 'SKU-C1', 'ADD', 10, 0, 10, 'r', 'IMPORT', 'BATCH-99', '', 'u', '2026-09-28')
+                """
+            )
 
 if __name__ == "__main__":
     unittest.main()

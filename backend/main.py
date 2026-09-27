@@ -7,7 +7,7 @@ import os
 import secrets
 import sys
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
@@ -892,6 +892,8 @@ class ImportPreviewRequest(BaseModel):
 class ImportApplyRequest(BaseModel):
     rows: List[Dict[str, Any]] = Field(..., description="Row dictionaries from CSV/Excel")
     mode: str = Field("add", description="Import mode: 'add' or 'replace'")
+    confirm_replace: bool = Field(False, description="Must be true if mode is replace")
+    reference_id: Optional[str] = Field(None, description="Batch reference ID for idempotency")
 
 
 @app.get("/api/inventory", dependencies=[Depends(verify_dashboard_auth)])
@@ -938,6 +940,20 @@ async def get_inventory_summary() -> Dict[str, Any]:
     total_skus, in_stock, low_stock, out_of_stock, unknown, stock_attention_count.
     """
     return inventory_service.get_summary()
+
+
+@app.get("/api/inventory/template", dependencies=[Depends(verify_dashboard_auth)])
+async def get_inventory_template() -> PlainTextResponse:
+    """
+    Generates a blank inventory initialization template CSV with all 768 catalogue SKUs,
+    matching import headers and blank physical quantities.
+    """
+    csv_content = inventory_service.generate_template_csv()
+    return PlainTextResponse(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=mudhra_inventory_template_768_skus.csv"},
+    )
 
 
 @app.get("/api/inventory/export", dependencies=[Depends(verify_dashboard_auth)])
@@ -1074,23 +1090,37 @@ async def bulk_update_reorder_level(req: BulkReorderLevelRequest) -> Dict[str, A
 
 
 @app.post("/api/inventory/import/preview", dependencies=[Depends(verify_dashboard_auth)])
-async def preview_inventory_import(req: ImportPreviewRequest) -> Dict[str, Any]:
+async def preview_inventory_import(req: Union[ImportPreviewRequest, List[Dict[str, Any]]]) -> Dict[str, Any]:
     """
     Dry-run validation of an uploaded CSV/Excel row set without applying changes.
     """
-    return inventory_service.preview_import(req.rows)
+    rows = req.rows if isinstance(req, ImportPreviewRequest) else req
+    return inventory_service.preview_import(rows)
 
 
 @app.post("/api/inventory/import/apply", dependencies=[Depends(verify_dashboard_auth)])
 async def apply_inventory_import(req: ImportApplyRequest) -> Dict[str, Any]:
     """
     Applies validated import rows with either 'add' or 'replace' mode.
+    Requires explicit confirm_replace=True when mode is 'replace'.
     """
-    if req.mode.lower() not in ("add", "replace"):
+    norm_mode = req.mode.lower()
+    if norm_mode not in ("add", "replace"):
         raise HTTPException(status_code=400, detail="Invalid import mode. Supported: 'add', 'replace'")
 
-    return inventory_service.apply_import(
-        rows=req.rows,
-        mode=req.mode.lower(),
-        user="owner",
-    )
+    if norm_mode == "replace" and not req.confirm_replace:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmation required: 'confirm_replace' must be true to apply import in replace mode."
+        )
+
+    try:
+        return inventory_service.apply_import(
+            rows=req.rows,
+            mode=norm_mode,
+            user="owner",
+            reference_id=req.reference_id,
+            confirm_replace=req.confirm_replace,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

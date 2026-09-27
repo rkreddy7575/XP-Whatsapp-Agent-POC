@@ -178,6 +178,9 @@ class InventoryProvider(ABC):
     def release_stock(self, sku: str, quantity: int) -> bool:
         pass
 
+    def has_transaction_reference(self, reference_type: str, reference_id: str) -> bool:
+        return False
+
 
 class DevelopmentInventoryProvider(InventoryProvider):
     """
@@ -424,8 +427,13 @@ class SqliteInventoryProvider(InventoryProvider):
             except Exception:
                 pass
 
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_tenant_sku ON inventory(tenant_id, sku);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_tx_tenant_sku ON inventory_transactions(tenant_id, sku)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_inv_tx_created_at ON inventory_transactions(tenant_id, created_at DESC)")
+            try:
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_inv_tx_ref_sku ON inventory_transactions(tenant_id, reference_type, reference_id, sku) WHERE reference_id IS NOT NULL;")
+            except Exception as e:
+                logger.warning(f"Could not create unique index idx_inv_tx_ref_sku (likely existing duplicates in dev db): {e}")
 
             # Seed from inventory_mock.json if table is empty
             cur = conn.cursor()
@@ -641,19 +649,34 @@ class SqliteInventoryProvider(InventoryProvider):
         self,
         sku: str,
         action: StockAction,
-        quantity: int,
+        quantity: Optional[int] = None,
         reason: Optional[str] = None,
         notes: Optional[str] = None,
         reference_type: Optional[str] = None,
         reference_id: Optional[str] = None,
         user: str = "owner",
         unit_cost: Optional[float] = None,
+        reorder_level: Optional[int] = None,
     ) -> InventoryItem:
         norm_sku = sku.strip().upper()
         conn = self._get_connection()
         try:
             with conn:
                 cur = conn.cursor()
+                if reference_id:
+                    cur.execute(
+                        """
+                        SELECT id FROM inventory_transactions
+                        WHERE tenant_id = ? AND reference_type = ? AND reference_id = ? AND UPPER(sku) = ?
+                        LIMIT 1
+                        """,
+                        (self.tenant_id, reference_type or "MANUAL", reference_id, norm_sku),
+                    )
+                    if cur.fetchone():
+                        # Already applied! Return current inventory without double-applying
+                        item = self.get_inventory(norm_sku)
+                        if item:
+                            return item
                 cur.execute(
                     "SELECT * FROM inventory WHERE tenant_id = ? AND UPPER(sku) = ?",
                     (self.tenant_id, norm_sku),
@@ -662,33 +685,48 @@ class SqliteInventoryProvider(InventoryProvider):
 
                 curr_physical = row["physical_quantity"] if row else None
                 curr_reserved = row["reserved_quantity"] if (row and row["reserved_quantity"]) else 0
-                reorder = row["reorder_level"] if (row and row["reorder_level"] is not None) else 100
+                reorder = reorder_level if reorder_level is not None else (row["reorder_level"] if (row and row["reorder_level"] is not None) else 100)
                 cost = unit_cost if unit_cost is not None else (row["unit_cost"] if row else None)
                 curr_status_str = row["status"] if row else "UNKNOWN"
                 supp_id = row["supplier_id"] if (row and "supplier_id" in row.keys()) else None
 
                 base_val = curr_physical if curr_physical is not None else 0
 
-                if action in (StockAction.RECEIVE, StockAction.ADD):
-                    new_physical = base_val + max(0, quantity)
-                    tx_type = "STOCK_RECEIVED" if action == StockAction.RECEIVE else "STOCK_ADDED"
-                    qty_change = max(0, quantity)
-                elif action == StockAction.REMOVE:
-                    new_physical = max(0, base_val - max(0, quantity))
-                    tx_type = "STOCK_REMOVED"
-                    qty_change = -(base_val - new_physical)
-                elif action == StockAction.DAMAGED:
-                    new_physical = max(0, base_val - max(0, quantity))
-                    tx_type = "DAMAGED"
-                    qty_change = -(base_val - new_physical)
-                elif action in (StockAction.CORRECTION, StockAction.SET):
-                    new_physical = max(0, quantity)
-                    tx_type = "STOCK_ADJUSTMENT"
-                    qty_change = new_physical - base_val
+                if quantity is None:
+                    if action in (StockAction.CORRECTION, StockAction.SET):
+                        new_physical = None
+                        tx_type = "STOCK_ADJUSTMENT"
+                        qty_change = -(curr_physical or 0)
+                    elif action in (StockAction.RECEIVE, StockAction.ADD):
+                        new_physical = curr_physical
+                        tx_type = "STOCK_ADDED"
+                        qty_change = 0
+                    else:
+                        new_physical = curr_physical
+                        tx_type = "STOCK_ADJUSTMENT"
+                        qty_change = 0
                 else:
-                    new_physical = max(0, quantity)
-                    tx_type = "STOCK_ADJUSTMENT"
-                    qty_change = new_physical - base_val
+                    qty_int = int(quantity)
+                    if action in (StockAction.RECEIVE, StockAction.ADD):
+                        new_physical = base_val + max(0, qty_int)
+                        tx_type = "STOCK_RECEIVED" if action == StockAction.RECEIVE else "STOCK_ADDED"
+                        qty_change = max(0, qty_int)
+                    elif action == StockAction.REMOVE:
+                        new_physical = max(0, base_val - max(0, qty_int))
+                        tx_type = "STOCK_REMOVED"
+                        qty_change = -(base_val - new_physical)
+                    elif action == StockAction.DAMAGED:
+                        new_physical = max(0, base_val - max(0, qty_int))
+                        tx_type = "DAMAGED"
+                        qty_change = -(base_val - new_physical)
+                    elif action in (StockAction.CORRECTION, StockAction.SET):
+                        new_physical = max(0, qty_int)
+                        tx_type = "STOCK_ADJUSTMENT"
+                        qty_change = new_physical - base_val
+                    else:
+                        new_physical = max(0, qty_int)
+                        tx_type = "STOCK_ADJUSTMENT"
+                        qty_change = new_physical - base_val
 
                 new_status = self._compute_status(new_physical, curr_reserved, reorder, curr_status_str)
                 now_str = datetime.now().isoformat()
@@ -871,6 +909,28 @@ class SqliteInventoryProvider(InventoryProvider):
                     source="SQLITE_PERSISTED",
                     last_updated=now_str,
                 )
+        finally:
+            if self._mem_conn is None:
+                conn.close()
+
+    def has_transaction_reference(
+        self,
+        reference_type: str,
+        reference_id: str,
+    ) -> bool:
+        """Checks if a transaction with the given reference_type and reference_id already exists."""
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT 1 FROM inventory_transactions
+                WHERE tenant_id = ? AND reference_type = ? AND reference_id = ?
+                LIMIT 1
+                """,
+                (self.tenant_id, reference_type, reference_id)
+            )
+            return cur.fetchone() is not None
         finally:
             if self._mem_conn is None:
                 conn.close()
@@ -1130,87 +1190,57 @@ class SupabaseInventoryProvider(InventoryProvider):
         self,
         sku: str,
         action: StockAction,
-        quantity: int,
+        quantity: Optional[int] = None,
         reason: Optional[str] = None,
         notes: Optional[str] = None,
         reference_type: Optional[str] = None,
         reference_id: Optional[str] = None,
         user: str = "owner",
         unit_cost: Optional[float] = None,
+        reorder_level: Optional[int] = None,
     ) -> InventoryItem:
         norm_sku = sku.strip().upper()
-        item = self.get_inventory(norm_sku)
+        action_val = action.value if hasattr(action, "value") else str(action)
 
-        curr_physical = item.physical_stock if item else None
-        curr_reserved = item.reserved_stock if item else 0
-        curr_reorder = item.reorder_level if item else 100
-        curr_cost = item.unit_cost if item else None
-        curr_status_str = item.status.value if item else "UNKNOWN"
-        supp_id = item.supplier_id if item else None
-
-        base_val = curr_physical if curr_physical is not None else 0
-
-        if action in (StockAction.RECEIVE, StockAction.ADD):
-            new_physical = base_val + max(0, quantity)
-            tx_type = "STOCK_RECEIVED" if action == StockAction.RECEIVE else "STOCK_ADDED"
-            qty_change = max(0, quantity)
-        elif action == StockAction.REMOVE:
-            new_physical = max(0, base_val - max(0, quantity))
-            tx_type = "STOCK_REMOVED"
-            qty_change = -(base_val - new_physical)
-        elif action == StockAction.DAMAGED:
-            new_physical = max(0, base_val - max(0, quantity))
-            tx_type = "DAMAGED"
-            qty_change = -(base_val - new_physical)
-        elif action in (StockAction.CORRECTION, StockAction.SET):
-            new_physical = max(0, quantity)
-            tx_type = "STOCK_ADJUSTMENT"
-            qty_change = new_physical - base_val
-        else:
-            new_physical = max(0, quantity)
-            tx_type = "STOCK_ADJUSTMENT"
-            qty_change = new_physical - base_val
-
-        new_status = self._compute_status(new_physical, curr_reserved, curr_reorder, curr_status_str)
-        eff_cost = unit_cost if unit_cost is not None else curr_cost
-
-        # Persist to Supabase
-        self._repo.upsert_inventory_item(
+        # Atomic execution in Supabase via PostgreSQL RPC:
+        # Stock adjustment and transaction audit log are committed together in one database transaction.
+        res = self._repo.adjust_stock_atomic(
             sku=norm_sku,
-            physical_quantity=new_physical,
-            reserved_quantity=curr_reserved,
-            reorder_level=curr_reorder,
-            unit_cost=eff_cost,
-            status=new_status.value,
-            supplier_id=supp_id,
-        )
-
-        # Record transaction audit
-        self._repo.record_transaction(
-            sku=norm_sku,
-            transaction_type=tx_type,
-            quantity_change=qty_change,
-            quantity_before=curr_physical,
-            quantity_after=new_physical,
-            reason=reason or "Stock adjustment",
-            reference_type=reference_type or "MANUAL",
-            reference_id=reference_id,
+            action=action_val,
+            quantity=quantity,
+            reason=reason,
             notes=notes,
+            reference_type=reference_type,
+            reference_id=reference_id,
             created_by=user,
+            unit_cost=unit_cost,
+            reorder_level=reorder_level,
         )
+
+        status_str = res.get("status", "UNKNOWN")
+        try:
+            new_status = InventoryStatus(status_str)
+        except ValueError:
+            new_status = InventoryStatus.UNKNOWN
 
         prod = catalogue_service.sku_index.get(norm_sku)
-        now_str = datetime.now().isoformat()
+        last_updated = res.get("last_updated") or datetime.now().isoformat()
+        if isinstance(last_updated, datetime):
+            last_updated = last_updated.isoformat()
+
+        raw_cost = res.get("unit_cost")
+        eff_cost = float(raw_cost) if raw_cost is not None else None
+
         return InventoryItem(
             sku=norm_sku,
-            physical_stock=new_physical,
-            reserved_stock=curr_reserved,
-            reorder_level=curr_reorder,
+            physical_stock=res.get("physical_quantity"),
+            reserved_stock=res.get("reserved_quantity") or 0,
+            reorder_level=res.get("reorder_level") if res.get("reorder_level") is not None else 100,
             unit_cost=eff_cost,
             status=new_status,
-            supplier_id=supp_id,
+            supplier_id=res.get("supplier_id"),
             source="SUPABASE_PERSISTED",
-            last_updated=now_str,
+            last_updated=str(last_updated),
             name=prod.get("name") if prod else None,
             category=prod.get("category") if prod else None,
         )
@@ -1315,6 +1345,16 @@ class SupabaseInventoryProvider(InventoryProvider):
             name=prod.get("name") if prod else None,
             category=prod.get("category") if prod else None,
         )
+
+    def has_transaction_reference(
+        self,
+        reference_type: str,
+        reference_id: str,
+    ) -> bool:
+        """Checks if an inventory transaction with reference_type and reference_id already exists in Supabase."""
+        if hasattr(self._repo, "has_transaction_reference"):
+            return self._repo.has_transaction_reference(reference_type, reference_id)
+        return False
 
     def get_transactions(
         self,

@@ -22,6 +22,7 @@ import {
   bulkUpdateStatus,
   bulkUpdateReorderLevel,
   downloadInventoryCsv,
+  downloadInventoryTemplate,
 } from './api';
 import { Header, type DashboardTab } from './components/Header';
 import { SummaryCards } from './components/SummaryCards';
@@ -391,6 +392,7 @@ export const App: React.FC = () => {
             onToggleStockAttention={setInvStockAttention}
             onOpenImportModal={() => setIsImportModalOpen(true)}
             onExportCsv={downloadInventoryCsv}
+            onDownloadTemplate={downloadInventoryTemplate}
             onRefresh={loadInventory}
             isLoading={invLoading}
           />

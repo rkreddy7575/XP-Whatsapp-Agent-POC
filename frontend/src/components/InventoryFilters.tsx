@@ -12,6 +12,7 @@ interface Props {
   onToggleStockAttention: (val: boolean) => void;
   onOpenImportModal: () => void;
   onExportCsv: () => void;
+  onDownloadTemplate: () => void;
   onRefresh: () => void;
   isLoading: boolean;
 }
@@ -28,6 +29,7 @@ export const InventoryFilters: React.FC<Props> = ({
   onToggleStockAttention,
   onOpenImportModal,
   onExportCsv,
+  onDownloadTemplate,
   onRefresh,
   isLoading,
 }) => {
@@ -162,6 +164,29 @@ export const InventoryFilters: React.FC<Props> = ({
         >
           <span>🔄</span>
           <span>{isLoading ? 'Loading...' : 'Refresh'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onDownloadTemplate}
+          id="inv-download-template-btn"
+          title="Download blank template with all 768 catalogue SKUs"
+          style={{
+            background: 'rgba(16, 185, 129, 0.15)',
+            border: '1px solid rgba(16, 185, 129, 0.3)',
+            color: '#34d399',
+            padding: '0.5rem 0.85rem',
+            borderRadius: '6px',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+          }}
+        >
+          <span>📋</span>
+          <span>Download Template</span>
         </button>
 
         <button

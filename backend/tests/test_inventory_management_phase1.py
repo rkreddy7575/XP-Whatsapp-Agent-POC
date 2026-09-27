@@ -203,7 +203,7 @@ class TestInventoryManagementPhase1(unittest.TestCase):
 
         # 2. REPLACE mode: replace with 80
         import_rows_replace = [{"sku": "XG-501", "quantity": 80, "price": 62.0}]
-        res_rep = self.service.apply_import(import_rows_replace, mode="replace")
+        res_rep = self.service.apply_import(import_rows_replace, mode="replace", confirm_replace=True)
         self.assertEqual(res_rep["applied_count"], 1)
         item_after_rep = self.service.get_inventory("XG-501")
         self.assertEqual(item_after_rep.physical_stock, 80)

@@ -134,6 +134,24 @@ class SupabaseClient:
             logger.error("Supabase update error on %s: %s", table, exc)
             return []
 
+    def rpc(self, function_name: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Executes a PostgreSQL RPC stored function via PostgREST.
+        Guarantees that database operations within the function run within a single ACID transaction.
+        """
+        if not self.is_configured:
+            raise RuntimeError("Supabase client is not configured")
+        url = f"{self.url}/rest/v1/rpc/{function_name}"
+        try:
+            resp = self.client.post(url, headers=self._headers(), json=params or {})
+            if resp.is_success:
+                return resp.json()
+            logger.warning("Supabase RPC %s failed: %d %s", function_name, resp.status_code, resp.text)
+            raise RuntimeError(f"Supabase RPC {function_name} failed: {resp.status_code} {resp.text}")
+        except httpx.HTTPError as exc:
+            logger.error("Supabase RPC error on %s: %s", function_name, exc)
+            raise RuntimeError(f"Supabase RPC network error on {function_name}: {exc}") from exc
+
 
 # =============================================================================
 # 1. SupabaseProductRepository
@@ -885,6 +903,48 @@ class SupabaseInventoryRepository:
         res = self.client.select("inventory", params)
         return {row["sku"].strip().upper(): row for row in res if "sku" in row}
 
+    def adjust_stock_atomic(
+        self,
+        sku: str,
+        action: str,
+        quantity: Optional[int] = None,
+        reason: Optional[str] = None,
+        notes: Optional[str] = None,
+        reference_type: Optional[str] = None,
+        reference_id: Optional[str] = None,
+        created_by: str = "owner",
+        unit_cost: Optional[float] = None,
+        reorder_level: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Executes an atomic inventory stock adjustment and audit transaction logging
+        inside a single ACID PostgreSQL transaction via stored RPC function.
+        Guarantees atomicity: stock cannot change without its audit transaction,
+        and transaction reference IDs remain unique.
+        """
+        if not self.is_configured:
+            raise RuntimeError("Supabase production inventory repository is not configured")
+        norm_sku = sku.strip().upper()
+        payload = {
+            "p_tenant_id": self.tenant_id,
+            "p_sku": norm_sku,
+            "p_action": action,
+            "p_quantity": quantity,
+            "p_reorder_level": reorder_level,
+            "p_unit_cost": unit_cost,
+            "p_reason": reason or "Stock adjustment",
+            "p_reference_type": reference_type or "MANUAL",
+            "p_reference_id": reference_id,
+            "p_notes": notes,
+            "p_created_by": created_by,
+        }
+        res = self.client.rpc("adjust_inventory_stock_atomic", payload)
+        if isinstance(res, list) and res:
+            res = res[0]
+        if not isinstance(res, dict):
+            raise RuntimeError(f"Unexpected response from adjust_inventory_stock_atomic RPC for {norm_sku}: {res}")
+        return res
+
     def upsert_inventory_item(
         self,
         sku: str,
@@ -975,6 +1035,23 @@ class SupabaseInventoryRepository:
         if sku:
             params["sku"] = f"eq.{sku.strip().upper()}"
         return self.client.select("inventory_transactions", params)
+
+    def has_transaction_reference(
+        self,
+        reference_type: str,
+        reference_id: str,
+    ) -> bool:
+        """Checks if an inventory transaction with reference_type and reference_id already exists."""
+        if not self.is_configured:
+            return False
+        params: Dict[str, Any] = {
+            "tenant_id": f"eq.{self.tenant_id}",
+            "reference_type": f"eq.{reference_type}",
+            "reference_id": f"eq.{reference_id}",
+            "limit": "1",
+        }
+        res = self.client.select("inventory_transactions", params)
+        return bool(res)
 
     def delete_inventory(self, sku: str) -> bool:
         """Deletes an inventory item scoped to tenant_id and sku (useful for tests)."""

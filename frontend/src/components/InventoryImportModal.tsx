@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { ImportPreviewResult } from '../types';
-import { previewInventoryImport, applyInventoryImport } from '../api';
+import { previewInventoryImport, applyInventoryImport, downloadInventoryTemplate } from '../api';
 
 interface Props {
   onClose: () => void;
@@ -16,10 +16,25 @@ export const InventoryImportModal: React.FC<Props> = ({ onClose, onSuccess }) =>
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{
+    currentBatch: number;
+    totalBatches: number;
+    processedRows: number;
+    totalRows: number;
+    percent: number;
+  } | null>(null);
+  // Stable session ID for idempotent batch retries — generated once per file upload
+  const [importSessionId, setImportSessionId] = useState<string>('');
+  // Tracks how many batches have been fully applied so retries resume from the right point
+  const [completedBatchIndex, setCompletedBatchIndex] = useState<number>(0);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Generate a stable session ID for this file upload — reused across retries
+    setImportSessionId(Date.now().toString(36));
+    setCompletedBatchIndex(0);
 
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -85,16 +100,78 @@ export const InventoryImportModal: React.FC<Props> = ({ onClose, onSuccess }) =>
       return;
     }
 
+    // Filter only valid rows
+    const validRows = parsedRows.filter((_, idx) => {
+      const pRow = previewResult.rows[idx];
+      return pRow && pRow.status === 'VALID';
+    });
+
+    if (validRows.length === 0) {
+      setError('No valid rows found to apply.');
+      return;
+    }
+
+    // Chunk into batches of 50 items to stay well within serverless timeouts
+    const BATCH_SIZE = 50;
+    const batches: Array<Array<Record<string, any>>> = [];
+    for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
+      batches.push(validRows.slice(i, i + BATCH_SIZE));
+    }
+
+    // Use the stable session ID generated at file upload — same ID across retries
+    const sessionId = importSessionId || Date.now().toString(36);
+    // Resume from where we left off (completedBatchIndex tracks successful batches)
+    const startBatch = completedBatchIndex;
+    let processedCount = startBatch * BATCH_SIZE;
+    let currentBatchNum = startBatch + 1;
+
     try {
       setIsLoading(true);
       setError(null);
-      await applyInventoryImport(parsedRows, importMode);
+
+      for (let bIdx = startBatch; bIdx < batches.length; bIdx++) {
+        currentBatchNum = bIdx + 1;
+        const batch = batches[bIdx];
+        const refId = `imp_${sessionId}_b${currentBatchNum}_of_${batches.length}`;
+
+        setProgress({
+          currentBatch: currentBatchNum,
+          totalBatches: batches.length,
+          processedRows: processedCount,
+          totalRows: validRows.length,
+          percent: Math.round((processedCount / validRows.length) * 100),
+        });
+
+        await applyInventoryImport(batch, importMode, confirmReplace, refId);
+        processedCount += batch.length;
+        // Track this batch as completed so retries skip it
+        setCompletedBatchIndex(bIdx + 1);
+
+        setProgress({
+          currentBatch: currentBatchNum,
+          totalBatches: batches.length,
+          processedRows: processedCount,
+          totalRows: validRows.length,
+          percent: Math.round((processedCount / validRows.length) * 100),
+        });
+      }
+
+      // Succeeded all batches completely — reset tracking state
+      setCompletedBatchIndex(0);
+      setImportSessionId('');
       onSuccess();
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Failed to apply import');
+      const failedBatch = currentBatchNum;
+      const completedSoFar = failedBatch - 1;
+      setError(
+        `Partial import failure: Batches 1 to ${completedSoFar} of ${batches.length} completed (${processedCount} SKUs updated). ` +
+        `Batch ${failedBatch} failed: ${err.message || 'Unknown error'}. ` +
+        `Click "Apply" again to safely retry from batch ${failedBatch} — already-completed batches will be skipped.`
+      );
     } finally {
       setIsLoading(false);
+      setProgress(null);
     }
   };
 
@@ -175,6 +252,50 @@ export const InventoryImportModal: React.FC<Props> = ({ onClose, onSuccess }) =>
             <div>
               <div
                 style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: '1rem',
+                  background: 'rgba(99, 102, 241, 0.08)',
+                  border: '1px solid rgba(99, 102, 241, 0.2)',
+                  padding: '0.75rem 1rem',
+                  borderRadius: '8px',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#f8fafc' }}>
+                    Need an inventory template?
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                    Download a CSV pre-populated with all 768 catalogue SKUs ready for import.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={downloadInventoryTemplate}
+                  id="modal-download-template-btn"
+                  style={{
+                    background: '#6366f1',
+                    border: 'none',
+                    color: '#ffffff',
+                    padding: '0.45rem 0.9rem',
+                    borderRadius: '6px',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span>📋</span>
+                  <span>Download Template (768 SKUs)</span>
+                </button>
+              </div>
+
+              <div
+                style={{
                   border: '2px dashed rgba(255, 255, 255, 0.15)',
                   borderRadius: '8px',
                   padding: '1.5rem',
@@ -235,6 +356,34 @@ export const InventoryImportModal: React.FC<Props> = ({ onClose, onSuccess }) =>
 
           {step === 2 && previewResult && (
             <div>
+              {/* Batch Processing Progress Bar */}
+              {progress && (
+                <div
+                  style={{
+                    marginBottom: '1rem',
+                    background: 'rgba(15, 23, 42, 0.9)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    padding: '0.85rem 1rem',
+                    borderRadius: '8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+                    <span>Applying Batch {progress.currentBatch} of {progress.totalBatches}...</span>
+                    <span>{progress.processedRows} / {progress.totalRows} SKUs ({progress.percent}%)</span>
+                  </div>
+                  <div style={{ width: '100%', height: '8px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        width: `${progress.percent}%`,
+                        height: '100%',
+                        background: '#10b981',
+                        transition: 'width 0.3s ease',
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Summary Stats Badges */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1.25rem' }}>
                 <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '0.75rem', borderRadius: '6px', textAlign: 'center' }}>

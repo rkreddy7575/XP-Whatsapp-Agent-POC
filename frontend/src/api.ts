@@ -409,7 +409,7 @@ export async function previewInventoryImport(rows: Array<Record<string, any>>): 
   const response = await fetch(`${API_BASE}/inventory/import/preview`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify(rows),
+    body: JSON.stringify({ rows }),
   });
 
   if (!response.ok) {
@@ -426,11 +426,21 @@ export async function previewInventoryImport(rows: Array<Record<string, any>>): 
   return response.json();
 }
 
-export async function applyInventoryImport(rows: Array<Record<string, any>>, mode: 'add' | 'replace'): Promise<ImportApplyResult> {
+export async function applyInventoryImport(
+  rows: Array<Record<string, any>>,
+  mode: 'add' | 'replace',
+  confirmReplace = false,
+  referenceId?: string,
+): Promise<ImportApplyResult> {
   const response = await fetch(`${API_BASE}/inventory/import/apply`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify({ rows, mode }),
+    body: JSON.stringify({
+      rows,
+      mode,
+      confirm_replace: confirmReplace,
+      reference_id: referenceId,
+    }),
   });
 
   if (!response.ok) {
@@ -445,6 +455,26 @@ export async function applyInventoryImport(rows: Array<Record<string, any>>, mod
   }
 
   return response.json();
+}
+
+export async function downloadInventoryTemplate(): Promise<void> {
+  const response = await fetch(`${API_BASE}/inventory/template`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to download inventory template: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mudhra_inventory_template_768_skus.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
 }
 
 export async function downloadInventoryCsv(): Promise<void> {
